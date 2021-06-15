@@ -122,27 +122,6 @@ update_1dr32_tex(struct texture *tex, void *data, size_t size)
 	glTexSubImage1D(GL_TEXTURE_1D, 0, 0, size, GL_RED, GL_FLOAT, data);
 }
 
-static struct texture
-create_2drgb_tex(void *data, size_t width, size_t height)
-{
-	struct texture tex;
-	static GLuint unit = 0;
-
-	tex.unit = unit++;
-	tex.type = GL_TEXTURE_2D;
-
-	glGenTextures(1, &tex.id);
-	glBindTexture(GL_TEXTURE_2D, tex.id);
-
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
-
-	return tex;
-}
-
 static void
 shader_reload(void)
 {
@@ -209,7 +188,7 @@ shader_reload(void)
 	glUseProgram(sprg);
 }
 
-static int
+static void
 shader_init(void)
 {
 	static float quad[] = {
@@ -337,10 +316,9 @@ input(void)
 static void
 update(void)
 {
-	size_t id;
 	GLint loc;
 	char cc[] = "cc000";
-	char ccc[] = "c00c000";
+	char ccc[] = "c00cc000";
 	int i, j;
 
 	loc = glGetUniformLocation(sprg, "fGlobalTime");
@@ -430,6 +408,8 @@ jack_process(jack_nframes_t frames, void *arg)
 	size_t size = sizeof(jack_default_audio_sample_t);
 	int r;
 
+	(void) arg; /* unused */
+
 	if (midi_port) {
 		buffer = jack_port_get_buffer(midi_port, frames);
 
@@ -472,6 +452,7 @@ jack_fini(void)
 static void
 jack_shutdown(void *arg)
 {
+	(void) arg; /* unused */
 	jack_fini();
 }
 

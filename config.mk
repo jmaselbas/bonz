@@ -13,7 +13,7 @@ LIBS := `pkg-config --libs sdl2 jack fftw3f`
 
 # Flags
 CFLAGS ?= -std=c99 -pedantic -march=native -D_XOPEN_SOURCE=500 -D_POSIX_C_SOURCE=200112L
-CFLAGS += -g -W -pthread
+CFLAGS += -Wall -Wextra -O2 -g
 CFLAGS += $(INCS) -DVERSION=\"$(VERSION)\"
 
 LDFLAGS += $(LIBS) -ldl
