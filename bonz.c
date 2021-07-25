@@ -38,7 +38,9 @@ struct shader {
 	char *name;
 	time_t time;
 };
-struct shader shader;
+size_t shader_count;
+struct shader shaders[16];
+struct shader *shader;
 
 struct texture tex_snd;
 struct texture tex_fft;
@@ -225,6 +227,8 @@ shader_init(void)
 		printf("--- ERROR ---\n%s", logbuf);
 		die("error in vertex shader\n");
 	}
+
+	glEnable(GL_BLEND);
 }
 
 static void
@@ -276,6 +280,8 @@ static void
 input(void)
 {
 	SDL_Event e;
+	size_t i;
+
 	while (SDL_PollEvent(&e)) {
 		switch(e.type) {
 		case SDL_QUIT:
@@ -289,10 +295,26 @@ input(void)
 				printf("--- %s ---\n", verbose ? "verbose" : "quiet");
 				break;
 			case SDLK_r:
-				shader_reload(&shader);
+				for (i = 0; i < shader_count; i++)
+					shader_reload(&shaders[i]);
 				break;
 			case SDLK_p:
 				panic();
+				break;
+			case SDLK_1:
+			case SDLK_2:
+			case SDLK_3:
+			case SDLK_4:
+			case SDLK_5:
+			case SDLK_6:
+			case SDLK_7:
+			case SDLK_8:
+			case SDLK_9:
+			case SDLK_0:
+				i = e.key.keysym.sym - '0';
+				if (i >= shader_count)
+					break;
+				shader = &shaders[i];
 				break;
 			}
 			break;
@@ -575,10 +597,11 @@ main(int argc, char **argv)
 {
 	struct stat stat;
 	int fd, ret;
+	size_t i;
 
 	argv0 = argv[0];
 
-	if (argc != 2)
+	if (argc < 2)
 		usage();
 
 	fd = open(argv[1], O_RDONLY);
@@ -590,7 +613,10 @@ main(int argc, char **argv)
 	if (!S_ISREG(stat.st_mode))
 		die("%s: is not a regular file\n", argv[1]);
 	close(fd);
-	shader.name = argv[1];
+
+	for (i = 1; (int)i < argc && shader_count < LEN(shaders); i++)
+		shaders[shader_count++].name = argv[i];
+	shader = &shaders[0];
 
 	plan = fftwf_plan_r2r_1d(FFT_SIZE, fftw_in, fftw_out, FFTW_REDFT10, FFTW_MEASURE);
 
@@ -601,10 +627,12 @@ main(int argc, char **argv)
 		width  = (w < 0) ? 0 : w;
 		height = (h < 0) ? 0 : h;
 		glViewport(0, 0, width, height);
+		glClear(GL_COLOR);
 		input();
-		shader_poll(&shader);
-		update(&shader);
-		render(&shader);
+		for (i = 0; i < shader_count; i++)
+			shader_poll(&shaders[i]);
+		update(shader);
+		render(shader);
 		SDL_GL_SwapWindow(window);
 	}
 	fini();
