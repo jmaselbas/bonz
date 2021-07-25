@@ -228,7 +228,7 @@ shader_init(void)
 	glGetShaderInfoLog(vshd, sizeof(logbuf), &logsize, logbuf);
 	glGetShaderiv(vshd, GL_COMPILE_STATUS, &ret);
 	if (!ret) {
-		glDeleteShader(fshd);
+		glDeleteShader(vshd);
 		printf("--- ERROR ---\n%s", logbuf);
 		die("error in vertex shader\n");
 	}
