@@ -7,6 +7,7 @@
 #include <errno.h>
 
 #include <sys/stat.h>
+#include <sys/types.h>
 
 #include "glad.h"
 #include <SDL.h>
@@ -29,16 +30,21 @@ unsigned int width = 1080;
 unsigned int height = 800;
 GLuint quad_vao;
 GLuint quad_vbo;
-GLuint sprg;
 GLuint vshd;
-GLuint fshd;
+
+struct shader {
+	GLuint prog;
+	GLuint fshd;
+	char *name;
+	time_t time;
+};
+struct shader shader;
 
 struct texture tex_snd;
 struct texture tex_fft;
 struct texture tex_fft_smth;
 float smth_fac = 0.9;
 
-char *frag_name;
 GLchar *frag;
 GLuint frag_size;
 
@@ -123,11 +129,11 @@ update_1dr32_tex(struct texture *tex, void *data, size_t size)
 }
 
 static void
-shader_reload(void)
+shader_reload(struct shader *s)
 {
+	const char *frag_name = s->name;
 	GLuint nprg = glCreateProgram();
 	GLuint fshd = glCreateShader(GL_FRAGMENT_SHADER);
-	static GLuint pfrag;
 	FILE *frag_file = fopen(frag_name, "r");
 	size_t size = 0;
 	int ret;
@@ -168,24 +174,11 @@ shader_reload(void)
 		return;
 	}
 
-	if (!sprg) {
-		sprg = nprg;
-	} else {
-		glDetachShader(sprg, pfrag);
-		glAttachShader(sprg, fshd);
-		glLinkProgram(sprg);
-		glGetProgramiv(sprg, GL_LINK_STATUS, &ret);
-		if (!ret) {
-			glGetProgramInfoLog(sprg, sizeof(logbuf), &logsize, logbuf);
-			printf("--- ERROR ---\n%s", logbuf);
-			return;
-		}
+	if (s->prog)
+		glDeleteProgram(s->prog);
+	s->prog = nprg;
 
-		glDeleteProgram(nprg);
-	}
-	printf("--- LOADED --- (%d) %d\n", nprg, sprg);
-	pfrag = fshd;
-	glUseProgram(sprg);
+	printf("--- LOADED --- (%d)\n", nprg);
 }
 
 static void
@@ -235,29 +228,29 @@ shader_init(void)
 }
 
 static void
-render(void)
+render(struct shader *s)
 {
 	GLint position;
 	GLint texcoord;
 	size_t stride;
 	size_t offset;
 
-	if (!sprg)
+	if (!s->prog)
 		return;
 
-	glUseProgram(sprg);
+	glUseProgram(s->prog);
 	glBindVertexArray(quad_vao);
 
 	stride = 5 * sizeof(float);
 	offset = 3 * sizeof(float);
 
-	position = glGetAttribLocation(sprg, "in_pos");
+	position = glGetAttribLocation(s->prog, "in_pos");
 	if (position >= 0) {
 		glVertexAttribPointer(position, 3, GL_FLOAT, GL_FALSE, stride, NULL);
 		glEnableVertexAttribArray(position);
 	}
 
-	texcoord = glGetAttribLocation(sprg, "in_texcoord");
+	texcoord = glGetAttribLocation(s->prog, "in_texcoord");
 	if (texcoord >= 0) {
 		glVertexAttribPointer(texcoord, 2, GL_FLOAT, GL_FALSE, stride, (GLvoid *)offset);
 		glEnableVertexAttribArray(texcoord);
@@ -267,7 +260,7 @@ render(void)
 }
 
 static void
-update_cc(int loc, unsigned char cc)
+update_cc(GLuint sprg, int loc, unsigned char cc)
 {
 	GLenum type;
 
@@ -296,7 +289,7 @@ input(void)
 				printf("--- %s ---\n", verbose ? "verbose" : "quiet");
 				break;
 			case SDLK_r:
-				shader_reload();
+				shader_reload(&shader);
 				break;
 			case SDLK_p:
 				panic();
@@ -314,12 +307,13 @@ input(void)
 }
 
 static void
-update(void)
+update(struct shader *s)
 {
 	GLint loc;
 	char cc[] = "cc000";
 	char ccc[] = "c00cc000";
 	int i, j;
+	GLuint sprg = s->prog;
 
 	loc = glGetUniformLocation(sprg, "fGlobalTime");
 	if (loc >= 0)
@@ -336,13 +330,13 @@ update(void)
 		snprintf(cc, sizeof(cc), "cc%d", i);
 		loc = glGetUniformLocation(sprg, cc);
 		if (loc >= 0)
-			update_cc(loc, midi_cc_last[i]);
+			update_cc(sprg, loc, midi_cc_last[i]);
 
 		for (j = 0; j < 16; j++) {
 			snprintf(ccc, sizeof(ccc), "c%dcc%d", j, i);
 			loc = glGetUniformLocation(sprg, ccc);
 			if (loc >= 0)
-				update_cc(loc, midi_cc[j][i]);
+				update_cc(sprg, loc, midi_cc[j][i]);
 		}
 	}
 
@@ -501,27 +495,23 @@ jack_init(void)
 	}
 }
 
-#include <sys/types.h>
-#include <sys/stat.h>
-
 static void
-shader_poll(void)
+shader_poll(struct shader *s)
 {
-	static __time_t last_time;
 	struct stat sb;
 	int ret;
 
-	ret = stat(frag_name, &sb);
+	ret = stat(s->name, &sb);
 	if (ret < 0) {
 		/* file is probably beeing saved */
 		if (errno != ENOENT)
-			fprintf(stderr, "stat '%s': %s\n", frag_name, strerror(errno));
+			fprintf(stderr, "stat '%s': %s\n", s->name, strerror(errno));
 		return;
 	}
 
-	if (last_time != sb.st_ctime) {
-		last_time = sb.st_ctime;
-		shader_reload();
+	if (s->time != sb.st_ctime) {
+		s->time = sb.st_ctime;
+		shader_reload(s);
 	}
 }
 
@@ -600,7 +590,7 @@ main(int argc, char **argv)
 	if (!S_ISREG(stat.st_mode))
 		die("%s: is not a regular file\n", argv[1]);
 	close(fd);
-	frag_name = argv[1];
+	shader.name = argv[1];
 
 	plan = fftwf_plan_r2r_1d(FFT_SIZE, fftw_in, fftw_out, FFTW_REDFT10, FFTW_MEASURE);
 
@@ -612,9 +602,9 @@ main(int argc, char **argv)
 		height = (h < 0) ? 0 : h;
 		glViewport(0, 0, width, height);
 		input();
-		shader_poll();
-		update();
-		render();
+		shader_poll(&shader);
+		update(&shader);
+		render(&shader);
 		SDL_GL_SwapWindow(window);
 	}
 	fini();
