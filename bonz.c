@@ -592,11 +592,30 @@ usage(void)
 	exit(1);
 }
 
-int
-main(int argc, char **argv)
+static int
+is_file(const char *file)
 {
 	struct stat stat;
 	int fd, ret;
+
+	fd = open(file, O_RDONLY);
+	if (fd == -1) {
+		fprintf(stderr, "open %s: %s\n", file, strerror(errno));
+		return 0;
+	}
+	ret = fstat(fd, &stat);
+	close(fd);
+	if (ret == -1) {
+		fprintf(stderr, "stat %s: %s\n", file, strerror(errno));
+		return 0;
+	}
+
+	return S_ISREG(stat.st_mode);
+}
+
+int
+main(int argc, char **argv)
+{
 	size_t i;
 
 	argv0 = argv[0];
@@ -604,18 +623,11 @@ main(int argc, char **argv)
 	if (argc < 2)
 		usage();
 
-	fd = open(argv[1], O_RDONLY);
-	if (fd == -1)
-		die("%s: %s\n", argv[1], strerror(errno));
-	ret = fstat(fd, &stat);
-	if (ret == -1)
-		die("stat: %s\n", argv[1], strerror(errno));
-	if (!S_ISREG(stat.st_mode))
-		die("%s: is not a regular file\n", argv[1]);
-	close(fd);
-
-	for (i = 1; (int)i < argc && shader_count < LEN(shaders); i++)
+	for (i = 1; (int)i < argc && shader_count < LEN(shaders); i++) {
+		if (!is_file(argv[i]))
+			die("%s: is not a regular file\n", argv[i]);
 		shaders[shader_count++].name = argv[i];
+	}
 	shader = &shaders[0];
 
 	plan = fftwf_plan_r2r_1d(FFT_SIZE, fftw_in, fftw_out, FFTW_REDFT10, FFTW_MEASURE);
