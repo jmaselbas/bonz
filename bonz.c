@@ -187,20 +187,18 @@ static void
 shader_init(void)
 {
 	static float quad[] = {
-		-1.0, -1.0,  0.5, 0.0, 0.0,
-		-1.0,  1.0,  0.5, 0.0, 1.0,
-		 1.0, -1.0,  0.5, 1.0, 0.0,
-		 1.0,  1.0,  0.5, 1.0, 1.0,
+		0.0, 0.0,
+		0.0, 1.0,
+		1.0, 0.0,
+		1.0, 1.0,
 	};
 	const char *vert =
 		"#version 410 core\n"
-		"in vec3 in_pos;\n"
-		"in vec2 in_texcoord;\n"
+		"in vec2 a_pos;\n"
 		"out vec2 texcoord;\n"
-		"void main()\n"
-		"{\n"
-		"  gl_Position = vec4(in_pos.x, in_pos.y, in_pos.z, 1.0);\n"
-		"  texcoord = in_texcoord;\n"
+		"void main() {\n"
+		"	gl_Position = vec4(a_pos * 2.0 - 1.0, 0.0, 1.0);\n"
+		"	texcoord = a_pos;\n"
 		"}\n";
 	GLint size = strlen(vert);
 	int ret;
@@ -235,9 +233,6 @@ static void
 render(struct shader *s)
 {
 	GLint position;
-	GLint texcoord;
-	size_t stride;
-	size_t offset;
 
 	if (!s->prog)
 		return;
@@ -245,19 +240,10 @@ render(struct shader *s)
 	glUseProgram(s->prog);
 	glBindVertexArray(quad_vao);
 
-	stride = 5 * sizeof(float);
-	offset = 3 * sizeof(float);
-
-	position = glGetAttribLocation(s->prog, "in_pos");
+	position = glGetAttribLocation(s->prog, "a_pos");
 	if (position >= 0) {
-		glVertexAttribPointer(position, 3, GL_FLOAT, GL_FALSE, stride, NULL);
+		glVertexAttribPointer(position, 2, GL_FLOAT, GL_FALSE, 0, NULL);
 		glEnableVertexAttribArray(position);
-	}
-
-	texcoord = glGetAttribLocation(s->prog, "in_texcoord");
-	if (texcoord >= 0) {
-		glVertexAttribPointer(texcoord, 2, GL_FLOAT, GL_FALSE, stride, (GLvoid *)offset);
-		glEnableVertexAttribArray(texcoord);
 	}
 
 	glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
