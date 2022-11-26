@@ -47,8 +47,8 @@ struct texture tex_fft;
 struct texture tex_fft_smth;
 float smth_fac = 0.9;
 
-GLchar *frag;
-GLuint frag_size;
+char *frag;
+size_t frag_size;
 
 char logbuf[4096];
 GLsizei logsize;
@@ -131,29 +131,52 @@ update_1dr32_tex(struct texture *tex, void *data, size_t size)
 }
 
 static void
+shader_bind_quad(struct shader *s)
+{
+	GLint position;
+
+	glUseProgram(s->prog);
+	glBindVertexArray(quad_vao);
+
+	position = glGetAttribLocation(s->prog, "a_pos");
+	if (position >= 0) {
+		glVertexAttribPointer(position, 2, GL_FLOAT, GL_FALSE, 0, NULL);
+		glEnableVertexAttribArray(position);
+	}
+}
+
+static void
 shader_reload(struct shader *s)
 {
-	const char *frag_name = s->name;
 	GLuint nprg = glCreateProgram();
 	GLuint fshd = glCreateShader(GL_FRAGMENT_SHADER);
-	FILE *frag_file = fopen(frag_name, "r");
-	size_t size = 0;
+	FILE *file = fopen(s->name, "r");
+	long size = 0;
+	const GLchar *src;
+	GLint len;
 	int ret;
 
-	if (!frag_file) {
-		fprintf(stderr, "%s: %s\n", frag_name, strerror(errno));
+	if (!file) {
+		fprintf(stderr, "%s: %s\n", s->name, strerror(errno));
 		return;
 	}
 
-	while (!feof(frag_file)) {
-		if ((size + 1024) > frag_size)
-			frag = realloc(frag, 1 + (frag_size += 1024));
-		size += fread(frag + size, sizeof(char), 1024, frag_file);
+	fseek(file, 0, SEEK_END);
+	size = ftell(file);
+	if (size < 0) {
+		fprintf(stderr, "%s: ftell: %s\n", s->name, strerror(errno));
+		return;
 	}
+	fseek(file, 0, SEEK_SET);
+	if ((size_t)size >= frag_size)
+		frag = realloc(frag, frag_size = size + 1024);
+	fread(frag, sizeof(char), size, file);
 	frag[size] = '\0';
-	fclose(frag_file);
+	fclose(file);
 
-	glShaderSource(fshd, 1, (const GLchar * const*)&frag, &frag_size);
+	src = frag;
+	len = size;
+	glShaderSource(fshd, 1, &src, &len);
 	glCompileShader(fshd);
 	glGetShaderiv(fshd, GL_COMPILE_STATUS, &ret);
 	if (!ret) {
@@ -181,6 +204,7 @@ shader_reload(struct shader *s)
 	s->prog = nprg;
 
 	printf("--- LOADED --- (%d)\n", nprg);
+	shader_bind_quad(s);
 }
 
 static void
@@ -232,20 +256,10 @@ shader_init(void)
 static void
 render(struct shader *s)
 {
-	GLint position;
-
 	if (!s->prog)
 		return;
 
 	glUseProgram(s->prog);
-	glBindVertexArray(quad_vao);
-
-	position = glGetAttribLocation(s->prog, "a_pos");
-	if (position >= 0) {
-		glVertexAttribPointer(position, 2, GL_FLOAT, GL_FALSE, 0, NULL);
-		glEnableVertexAttribArray(position);
-	}
-
 	glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 }
 
