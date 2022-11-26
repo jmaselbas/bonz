@@ -460,9 +460,11 @@ jack_process(jack_nframes_t frames, void *arg)
 static void
 jack_fini(void)
 {
-	jack_deactivate(jack);
-	jack_client_close(jack);
-	jack = NULL;
+	if (jack) {
+		jack_deactivate(jack);
+		jack_client_close(jack);
+		jack = NULL;
+	}
 }
 
 static void
@@ -491,8 +493,8 @@ jack_init(void)
 	if (ret) {
 		fprintf(stderr, "Could not register process callback.\n");
 		return;
-
 	}
+
 	midi_port = jack_port_register(jack, "input", JACK_DEFAULT_MIDI_TYPE, JackPortIsInput, 0);
 	if (!midi_port) {
 		fprintf(stderr, "Could not register midi port.\n");
