@@ -475,7 +475,7 @@ jack_shutdown(void *arg)
 static void
 jack_init(void)
 {
-	jack_options_t options = JackNoStartServer | JackServerName;
+	jack_options_t options = JackNoStartServer;
 	const char **ports;
 	int ret;
 
