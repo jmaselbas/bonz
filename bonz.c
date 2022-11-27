@@ -208,6 +208,14 @@ shader_reload(struct shader *s)
 }
 
 static void
+texture_init(void)
+{
+	tex_fft = create_1dr32_tex(LEN(fftw_out), fftw_out);
+	tex_fft_smth = create_1dr32_tex(LEN(fft_smth), fft_smth);
+	tex_snd = create_1dr32_tex(LEN(fftw_in), fftw_in);
+}
+
+static void
 shader_init(void)
 {
 	static float quad[] = {
@@ -226,10 +234,6 @@ shader_init(void)
 		"}\n";
 	GLint size = strlen(vert);
 	int ret;
-
-	tex_fft = create_1dr32_tex(LEN(fftw_out), fftw_out);
-	tex_fft_smth = create_1dr32_tex(LEN(fft_smth), fft_smth);
-	tex_snd = create_1dr32_tex(LEN(fftw_in), fftw_in);
 
 	glGenVertexArrays(1, &quad_vao);
 	glBindVertexArray(quad_vao);
@@ -579,6 +583,7 @@ init(void)
 
 	jack_init();
 	shader_init();
+	texture_init();
 }
 
 static void
