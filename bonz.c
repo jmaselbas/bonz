@@ -104,7 +104,7 @@ panic(void)
 }
 
 static struct texture
-create_1dr32_tex(void *data, size_t size)
+create_1dr32_tex(size_t size, void *data)
 {
 	struct texture tex;
 	static GLuint unit = 0;
@@ -113,12 +113,12 @@ create_1dr32_tex(void *data, size_t size)
 	tex.type = GL_TEXTURE_1D;
 
 	glGenTextures(1, &tex.id);
-	glBindTexture(GL_TEXTURE_1D, tex.id);
+	glBindTexture(tex.type, tex.id);
 
-	glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(tex.type, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(tex.type, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
-	glTexImage1D(GL_TEXTURE_1D, 0, GL_R32F, size, 0, GL_RED, GL_FLOAT, data);
+	glTexImage1D(tex.type, 0, GL_R32F, size, 0, GL_RED, GL_FLOAT, data);
 
 	return tex;
 }
@@ -227,9 +227,9 @@ shader_init(void)
 	GLint size = strlen(vert);
 	int ret;
 
-	tex_fft = create_1dr32_tex(fftw_out, LEN(fftw_out));
-	tex_fft_smth = create_1dr32_tex(fft_smth, LEN(fft_smth));
-	tex_snd = create_1dr32_tex(fftw_in, LEN(fftw_in));
+	tex_fft = create_1dr32_tex(LEN(fftw_out), fftw_out);
+	tex_fft_smth = create_1dr32_tex(LEN(fft_smth), fft_smth);
+	tex_snd = create_1dr32_tex(LEN(fftw_in), fftw_in);
 
 	glGenVertexArrays(1, &quad_vao);
 	glBindVertexArray(quad_vao);
