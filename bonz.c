@@ -104,17 +104,40 @@ panic(void)
 }
 
 static struct texture
-create_1dr32_tex(size_t size, void *data)
+create_tex(GLenum type)
 {
-	struct texture tex;
+	struct texture tex = {0};
 	static GLuint unit = 0;
 
 	tex.unit = unit++;
-	tex.type = GL_TEXTURE_1D;
-
+	tex.type = type;
 	glGenTextures(1, &tex.id);
-	glBindTexture(tex.type, tex.id);
 
+	return tex;
+}
+
+static struct texture
+create_2drgb_tex(size_t w, size_t h, void *data)
+{
+	struct texture tex = create_tex(GL_TEXTURE_2D);
+
+	glBindTexture(tex.type, tex.id);
+	glTexParameteri(tex.type, GL_TEXTURE_WRAP_S, GL_REPEAT);
+	glTexParameteri(tex.type, GL_TEXTURE_WRAP_T, GL_REPEAT);
+	glTexParameteri(tex.type, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(tex.type, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+	glTexImage2D(tex.type, 0, GL_RGB, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, data);
+
+	return tex;
+}
+
+static struct texture
+create_1dr32_tex(size_t size, void *data)
+{
+	struct texture tex = create_tex(GL_TEXTURE_1D);
+
+	glBindTexture(tex.type, tex.id);
 	glTexParameteri(tex.type, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	glTexParameteri(tex.type, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
