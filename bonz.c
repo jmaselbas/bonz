@@ -544,7 +544,7 @@ shader_poll(struct shader *s)
 }
 
 static void
-init(void)
+sdl_gl_init(void)
 {
 	if (SDL_InitSubSystem(SDL_INIT_VIDEO))
 		die("SDL init failed: %s\n", SDL_GetError());
@@ -578,7 +578,12 @@ init(void)
 		die("GL init failed\n");
 
 	glViewport(0, 0, width, height);
+}
 
+static void
+init(void)
+{
+	sdl_gl_init();
 	time_start = get_time();
 
 	jack_init();
