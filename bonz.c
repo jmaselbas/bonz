@@ -21,7 +21,7 @@ struct texture {
 #define LEN(a) (sizeof(a)/sizeof(*a))
 
 SDL_Window *window;
-SDL_GLContext context;
+SDL_GLContext gl_ctx;
 double time_start;
 
 int verbose;
@@ -593,8 +593,8 @@ sdl_gl_init(void)
 	if (!window)
 		die("Failed to create window: %s\n", SDL_GetError());
 
-	context = SDL_GL_CreateContext(window);
-	if (!context)
+	gl_ctx = SDL_GL_CreateContext(window);
+	if (!gl_ctx)
 		die("Failed to create openGL context: %s\n", SDL_GetError());
 
 	if (!gladLoadGLLoader((GLADloadproc) SDL_GL_GetProcAddress))
