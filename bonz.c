@@ -20,14 +20,16 @@ struct texture {
 
 #define LEN(a) (sizeof(a)/sizeof(*a))
 
-SDL_Window *window;
+SDL_Window *win_live;
+SDL_Window *win_ctrl;
+unsigned int default_width = 1080;
+unsigned int default_height = 800;
+
 SDL_GLContext gl_ctx;
 double time_start;
 
 int verbose;
 char *argv0;
-unsigned int width = 1080;
-unsigned int height = 800;
 GLuint quad_vao;
 GLuint quad_vbo;
 GLuint vshd;
@@ -281,16 +283,6 @@ shader_init(void)
 }
 
 static void
-render(struct shader *s)
-{
-	if (!s->prog)
-		return;
-
-	glUseProgram(s->prog);
-	glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-}
-
-static void
 update_cc(GLuint sprg, int loc, unsigned char cc)
 {
 	GLenum type;
@@ -310,7 +302,13 @@ input(void)
 	size_t i;
 
 	while (SDL_PollEvent(&e)) {
-		switch(e.type) {
+		switch (e.type) {
+		case SDL_WINDOWEVENT:
+			if (e.window.event == SDL_WINDOWEVENT_CLOSE) {
+				fini();
+				exit(0);
+			}
+			break;
 		case SDL_QUIT:
 			fini();
 			exit(0);
@@ -349,31 +347,27 @@ input(void)
 		case SDL_MOUSEMOTION:
 		case SDL_MOUSEBUTTONDOWN:
 		case SDL_MOUSEBUTTONUP:
-		case SDL_WINDOWEVENT:
 			break;
 		}
 	}
 }
 
 static void
-update(struct shader *s)
+update_shader(struct shader *s)
 {
 	GLint loc;
 	char cc[] = "cc000";
 	char ccc[] = "c00cc000";
 	int i, j;
 	GLuint sprg = s->prog;
+	float time = get_time() - time_start;
 
 	loc = glGetUniformLocation(sprg, "fGlobalTime");
 	if (loc >= 0)
-		glProgramUniform1f(sprg, loc, get_time() - time_start);
+		glProgramUniform1f(sprg, loc, time);
 	loc = glGetUniformLocation(sprg, "time");
 	if (loc >= 0)
-		glProgramUniform1f(sprg, loc, get_time() - time_start);
-
-	loc = glGetUniformLocation(sprg, "v2Resolution");
-	if (loc >= 0)
-		glProgramUniform2f(sprg, loc, width, height);
+		glProgramUniform1f(sprg, loc, time);
 
 	for (i = 0; i < 128; i++) {
 		snprintf(cc, sizeof(cc), "cc%d", i);
@@ -409,6 +403,42 @@ update(struct shader *s)
 		update_1dr32_tex(&tex_snd, fftw_in, LEN(fftw_in));
 		glProgramUniform1i(sprg, loc, tex_snd.unit);
 	}
+}
+
+static void
+render_shader(struct shader *s, int x, int y, int w, int h)
+{
+	GLint loc = glGetUniformLocation(s->prog, "v2Resolution");
+	if (loc >= 0)
+		glProgramUniform2f(s->prog, loc, w-x, h-y);
+
+	glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+}
+
+static void
+render_window(SDL_Window *window)
+{
+	int w, h;
+
+	SDL_GL_MakeCurrent(window, gl_ctx);
+	SDL_GL_GetDrawableSize(window, &w, &h);
+	glViewport(0, 0, w, h);
+	glClear(GL_COLOR);
+
+	if (shader->prog) {
+		glUseProgram(shader->prog);
+		update_shader(shader);
+		render_shader(shader, 0, 0, w, h);
+	}
+
+	SDL_GL_SwapWindow(window);
+}
+
+static void
+render(void)
+{
+	render_window(win_live);
+	render_window(win_ctrl);
 }
 
 static void
@@ -569,6 +599,8 @@ shader_poll(struct shader *s)
 static void
 sdl_gl_init(void)
 {
+	SDL_Window *window;
+
 	if (SDL_InitSubSystem(SDL_INIT_VIDEO))
 		die("SDL init failed: %s\n", SDL_GetError());
 
@@ -583,12 +615,8 @@ sdl_gl_init(void)
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
 
 	window = SDL_CreateWindow(argv0, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
-				  width, height,
-				  SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE
-				  | SDL_WINDOW_INPUT_FOCUS
-				  | SDL_WINDOW_MOUSE_FOCUS
-				  | SDL_WINDOW_MAXIMIZED
-				  );
+				  default_width, default_height,
+				  SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
 
 	if (!window)
 		die("Failed to create window: %s\n", SDL_GetError());
@@ -600,7 +628,11 @@ sdl_gl_init(void)
 	if (!gladLoadGLLoader((GLADloadproc) SDL_GL_GetProcAddress))
 		die("GL init failed\n");
 
-	glViewport(0, 0, width, height);
+	win_live = window;
+
+	win_ctrl = SDL_CreateWindow("ctrl", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+				    default_width, default_height,
+				    SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
 }
 
 static void
@@ -669,18 +701,10 @@ main(int argc, char **argv)
 
 	init();
 	while (1) {
-		int w, h;
-		SDL_GL_GetDrawableSize(window, &w, &h);
-		width  = (w < 0) ? 0 : w;
-		height = (h < 0) ? 0 : h;
-		glViewport(0, 0, width, height);
-		glClear(GL_COLOR);
 		input();
 		for (i = 0; i < shader_count; i++)
 			shader_poll(&shaders[i]);
-		update(shader);
-		render(shader);
-		SDL_GL_SwapWindow(window);
+		render();
 	}
 	fini();
 
