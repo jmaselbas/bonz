@@ -170,10 +170,41 @@ shader_bind_quad(struct shader *s)
 	}
 }
 
+static int
+shader_compile(GLuint shd, const GLchar *txt, GLint len)
+{
+	int ret;
+
+	glShaderSource(shd, 1, &txt, &len);
+	glCompileShader(shd);
+	glGetShaderiv(shd, GL_COMPILE_STATUS, &ret);
+	if (!ret) {
+		glGetShaderInfoLog(shd, sizeof(logbuf), &logsize, logbuf);
+		fprintf(stderr, "--- ERROR ---\n%s", logbuf);
+	}
+	return ret;
+}
+
+static int
+shader_link(GLuint prg, GLuint vert, GLuint frag)
+{
+	int ret;
+
+	glAttachShader(prg, vert);
+	glAttachShader(prg, frag);
+	glLinkProgram(prg);
+	glGetProgramiv(prg, GL_LINK_STATUS, &ret);
+	if (!ret) {
+		glGetProgramInfoLog(prg, sizeof(logbuf), &logsize, logbuf);
+		printf("--- ERROR ---\n%s", logbuf);
+	}
+	return ret;
+}
+
 static void
 shader_reload(struct shader *s)
 {
-	GLuint nprg = glCreateProgram();
+	GLuint nprg;
 	GLuint fshd = glCreateShader(GL_FRAGMENT_SHADER);
 	FILE *file = fopen(s->name, "r");
 	long size = 0;
@@ -201,26 +232,14 @@ shader_reload(struct shader *s)
 
 	src = frag;
 	len = size;
-	glShaderSource(fshd, 1, &src, &len);
-	glCompileShader(fshd);
-	glGetShaderiv(fshd, GL_COMPILE_STATUS, &ret);
-	if (!ret) {
-		glGetShaderInfoLog(fshd, sizeof(logbuf), &logsize, logbuf);
-		glDeleteProgram(nprg);
+	if (!shader_compile(fshd, src, len)) {
 		glDeleteShader(fshd);
-		printf("--- ERROR ---\n%s", logbuf);
 		return;
 	}
-
-	glAttachShader(nprg, vshd);
-	glAttachShader(nprg, fshd);
-	glLinkProgram(nprg);
-	glGetProgramiv(nprg, GL_LINK_STATUS, &ret);
-	if (!ret) {
-		glGetProgramInfoLog(nprg, sizeof(logbuf), &logsize, logbuf);
+	nprg = glCreateProgram();
+	if (!shader_link(nprg, vshd, fshd)) {
 		glDeleteProgram(nprg);
 		glDeleteShader(fshd);
-		printf("--- ERROR ---\n%s", logbuf);
 		return;
 	}
 
@@ -257,8 +276,6 @@ shader_init(void)
 		"	gl_Position = vec4(a_pos * 2.0 - 1.0, 0.0, 1.0);\n"
 		"	texcoord = a_pos;\n"
 		"}\n";
-	GLint size = strlen(vert);
-	int ret;
 
 	glGenVertexArrays(1, &quad_vao);
 	glBindVertexArray(quad_vao);
@@ -269,15 +286,8 @@ shader_init(void)
 	glBindVertexArray(0);
 
 	vshd = glCreateShader(GL_VERTEX_SHADER);
-	glShaderSource(vshd, 1, &vert, &size);
-	glCompileShader(vshd);
-	glGetShaderInfoLog(vshd, sizeof(logbuf), &logsize, logbuf);
-	glGetShaderiv(vshd, GL_COMPILE_STATUS, &ret);
-	if (!ret) {
-		glDeleteShader(vshd);
-		printf("--- ERROR ---\n%s", logbuf);
+	if (!shader_compile(vshd, vert, strlen(vert)))
 		die("error in vertex shader\n");
-	}
 
 	glEnable(GL_BLEND);
 }
