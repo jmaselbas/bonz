@@ -12,6 +12,8 @@
 #include "glad.h"
 #include <SDL.h>
 
+#define GLSL_VERSION "#version 400 core\n"
+
 struct texture {
 	GLenum unit;
 	GLenum type;
@@ -269,7 +271,7 @@ shader_init(void)
 		1.0, 1.0,
 	};
 	const char *vert =
-		"#version 410 core\n"
+		GLSL_VERSION
 		"in vec2 a_pos;\n"
 		"out vec2 texcoord;\n"
 		"void main() {\n"
