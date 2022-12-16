@@ -46,6 +46,7 @@ size_t shader_count;
 struct shader shaders[16];
 struct shader *shader;
 
+struct texture tex_gui;
 struct texture tex_snd;
 struct texture tex_fft;
 struct texture tex_fft_smth;
@@ -71,6 +72,10 @@ fftwf_plan plan;
 jack_client_t *jack;
 jack_port_t *midi_port;
 jack_port_t *input_port;
+
+#include "qoi.h"
+
+static void gui_text(int x, int y, const char *s);
 
 static void fini(void);
 
@@ -131,7 +136,7 @@ create_2drgb_tex(size_t w, size_t h, void *data)
 	glTexParameteri(tex.type, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	glTexParameteri(tex.type, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
-	glTexImage2D(tex.type, 0, GL_RGB, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, data);
+	glTexImage2D(tex.type, 0, GL_RGB, w, h, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
 
 	return tex;
 }
@@ -188,16 +193,16 @@ shader_compile(GLuint shd, const GLchar *txt, GLint len)
 }
 
 static int
-shader_link(GLuint prg, GLuint vert, GLuint frag)
+shader_link(GLuint prog, GLuint vert, GLuint frag)
 {
 	int ret;
 
-	glAttachShader(prg, vert);
-	glAttachShader(prg, frag);
-	glLinkProgram(prg);
-	glGetProgramiv(prg, GL_LINK_STATUS, &ret);
+	glAttachShader(prog, vert);
+	glAttachShader(prog, frag);
+	glLinkProgram(prog);
+	glGetProgramiv(prog, GL_LINK_STATUS, &ret);
 	if (!ret) {
-		glGetProgramInfoLog(prg, sizeof(logbuf), &logsize, logbuf);
+		glGetProgramInfoLog(prog, sizeof(logbuf), &logsize, logbuf);
 		printf("--- ERROR ---\n%s", logbuf);
 	}
 	return ret;
@@ -442,15 +447,124 @@ render_window(SDL_Window *window)
 		update_shader(shader);
 		render_shader(shader, 0, 0, w, h);
 	}
+}
 
-	SDL_GL_SwapWindow(window);
+static GLuint gui_prg;
+static GLuint gui_vao;
+static GLuint gui_vbo;
+static float gui_data[256 * 8];
+
+static void
+gui_init(void)
+{
+	GLuint nprg = glCreateProgram();
+	GLuint vshd = glCreateShader(GL_VERTEX_SHADER);
+	GLuint fshd = glCreateShader(GL_FRAGMENT_SHADER);
+	const char *vert =
+		GLSL_VERSION
+		"in vec2 a_pos;\n"
+		"out vec2 texcoord;\n"
+		"uniform mat2 xfrm;\n"
+		"uniform mat2 tfrm;\n"
+		"void main() {\n"
+		"	gl_Position = vec4(a_pos*xfrm[0]+xfrm[1], 0.0, 1.0);\n"
+		"	texcoord = a_pos*tfrm[0]+tfrm[1];\n"
+		"}\n";
+	const char *frag =
+		GLSL_VERSION
+		"in vec2 texcoord;\n"
+		"out vec4 out_color;\n"
+		"uniform sampler2D t_gui;"
+		"void main() {\n"
+		"	if (texture(t_gui, texcoord).r < 0.5) discard;\n"
+		"	out_color = vec4(vec3(1.0), 1.0);\n"
+		"}\n";
+	const char *file = "ascii.qoi";
+	qoi_desc desc;
+	void *data = qoi_read(file, &desc, 3);
+	if (!data)
+		die("%s: qoi_read: %s\n", file, strerror(errno));
+	tex_gui = create_2drgb_tex(desc.width, desc.height, data);
+	free(data);
+
+	if (!shader_compile(vshd, vert, strlen(vert)))
+		die("gui: error in vertex shader\n");
+	if (!shader_compile(fshd, frag, strlen(frag)))
+		die("gui: error in fragment shader\n");
+	if (!shader_link(nprg, vshd, fshd))
+		die("gui: error in program link\n");
+
+	gui_prg = nprg;
+	shader_bind_quad(&(struct shader){.prog=gui_prg});
+#if 0
+	glGenBuffers(1, &gui_vbo);
+	glBindBuffer(GL_ARRAY_BUFFER, gui_vbo);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(gui_data), gui_data, GL_STREAM_DRAW);
+#endif
+}
+
+static void
+gui_text(int x, int y, const char *s)
+{
+	GLuint sprg = gui_prg;
+	float *v = gui_data;
+	size_t n = 0;
+	GLint utex = glGetUniformLocation(sprg, "t_gui");
+	float xfrm[2][2];
+	GLint xloc = glGetUniformLocation(sprg, "xfrm");
+	float tfrm[2][2];
+	GLint tloc = glGetUniformLocation(sprg, "tfrm");
+	int w, h;
+
+	SDL_GL_GetDrawableSize(win_ctrl, &w, &h);
+
+	glUseProgram(sprg);
+	glBindVertexArray(quad_vao);
+	if (utex >= 0) {
+		glActiveTexture(GL_TEXTURE0 + tex_gui.unit);
+		glProgramUniform1i(sprg, utex, tex_gui.unit);
+		glBindTexture(tex_gui.type, tex_gui.id);
+	}
+
+	float ex = 2.0*32.0/(float)w, ey = 2.0*32.0/(float)h;
+	float ox = x/(float)w, oy = y/(float)h;
+	float tw = 1.0/16.0, th = 1.0/6.0;
+	float tx, ty;
+
+	for (;*s; s++) {
+		xfrm[0][0] = ex;
+		xfrm[0][1] = -ey;
+		xfrm[1][0] = -1 + ox;
+		xfrm[1][1] = +1 - oy;
+		if (xloc >= 0)
+			glUniformMatrix2fv(xloc, 1, GL_FALSE, (float *)&xfrm);
+
+		tx = ((int)(*s - ' ') % 16) / 16.0;
+		ty = ((int)(*s - ' ') / 16) / 6.0;
+		tfrm[0][0] = tw;
+		tfrm[0][1] = th;
+		tfrm[1][0] = -1 + tx;
+		tfrm[1][1] = +1 + ty;
+		if (tloc >= 0)
+			glUniformMatrix2fv(tloc, 1, GL_FALSE, (float *)&tfrm);
+
+		glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+		ox+=ex;
+	}
 }
 
 static void
 render(void)
 {
-	render_window(win_live);
+//	render_window(win_live);
+//	SDL_GL_SwapWindow(win_live);
+
 	render_window(win_ctrl);
+	for (int i = 0; i < 100; i++)
+		gui_text(4*i, 32*i, "!\"#$%&'()*+,-./test instanced text !");
+	gui_text(64, 64, "instanced text !");
+	SDL_GL_SwapWindow(win_ctrl);
 }
 
 static void
@@ -641,10 +755,14 @@ sdl_gl_init(void)
 		die("GL init failed\n");
 
 	win_live = window;
-
+#if 1
+	win_ctrl = win_live;
+#else
 	win_ctrl = SDL_CreateWindow("ctrl", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
 				    default_width, default_height,
 				    SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
+	}
+#endif
 }
 
 static void
@@ -656,6 +774,7 @@ init(void)
 	jack_init();
 	shader_init();
 	texture_init();
+	gui_init();
 }
 
 static void
