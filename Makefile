@@ -14,6 +14,11 @@ $(BIN): $(OBJ)
 
 $(OBJ): config.mk
 
+%.o: %.c
+	$(CC) -c -o $@ $< $(CFLAGS)
+	@$(CC) -MP -MM $< -MT $@ -MF $(call namesubst,%,.%.mk,$@) $(CFLAGS)
+-include $(shell find . -name ".*.mk")
+
 install: all
 	mkdir -p $(DESTDIR)$(PREFIX)/bin
 	cp -f $(BIN) $(DESTDIR)$(PREFIX)/bin
@@ -36,3 +41,5 @@ clean:
 	rm -f $(BIN) $(OBJ) $(BIN)-$(VERSION).tar.gz
 
 .PHONY: all install uninstall dist clean
+
+namesubst = $(foreach i,$3,$(subst $(notdir $i),$(patsubst $1,$2,$(notdir $i)), $i))
