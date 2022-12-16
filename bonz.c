@@ -72,6 +72,8 @@ jack_client_t *jack;
 jack_port_t *midi_port;
 jack_port_t *input_port;
 
+#include "qoi.h"
+
 static void fini(void);
 
 static void

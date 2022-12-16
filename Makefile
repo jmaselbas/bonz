@@ -3,7 +3,7 @@
 
 include config.mk
 
-SRC = bonz.c glad.c
+SRC = bonz.c glad.c qoi.c
 BIN = bonz
 OBJ = $(SRC:.c=.o)
 
