@@ -217,7 +217,6 @@ shader_reload(struct shader *s)
 	long size = 0;
 	const GLchar *src;
 	GLint len;
-	int ret;
 
 	if (!file) {
 		fprintf(stderr, "%s: %s\n", s->name, strerror(errno));
