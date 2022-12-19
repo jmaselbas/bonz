@@ -440,7 +440,7 @@ render_window(SDL_Window *window)
 	SDL_GL_MakeCurrent(window, gl_ctx);
 	SDL_GL_GetDrawableSize(window, &w, &h);
 	glViewport(0, 0, w, h);
-	glClear(GL_COLOR);
+	glClear(GL_COLOR_BUFFER_BIT);
 
 	if (shader->prog) {
 		glUseProgram(shader->prog);
