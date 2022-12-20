@@ -12,6 +12,12 @@
 #include "glad.h"
 #include <SDL.h>
 
+#undef offsetof
+#define offsetof(type, memb) ((void *)__builtin_offsetof(type, memb))
+#define OFF offsetof
+
+#define LEN(a) (sizeof(a)/sizeof(*a))
+
 #define GLSL_VERSION "#version 400 core\n"
 
 struct texture {
@@ -19,8 +25,6 @@ struct texture {
 	GLenum type;
 	GLuint id;
 };
-
-#define LEN(a) (sizeof(a)/sizeof(*a))
 
 SDL_Window *win_live;
 SDL_Window *win_ctrl;
@@ -131,8 +135,14 @@ create_2drgb_tex(size_t w, size_t h, void *data)
 	struct texture tex = create_tex(GL_TEXTURE_2D);
 
 	glBindTexture(tex.type, tex.id);
-	glTexParameteri(tex.type, GL_TEXTURE_WRAP_S, GL_REPEAT);
-	glTexParameteri(tex.type, GL_TEXTURE_WRAP_T, GL_REPEAT);
+/* linear min/mag filter do not mix well with sampling specific texel */
+//	glTexParameteri(tex.type, GL_TEXTURE_WRAP_S, GL_REPEAT);
+//	glTexParameteri(tex.type, GL_TEXTURE_WRAP_T, GL_REPEAT);
+//	glTexParameteri(tex.type, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+//	glTexParameteri(tex.type, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+	glTexParameteri(tex.type, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+	glTexParameteri(tex.type, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
 	glTexParameteri(tex.type, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	glTexParameteri(tex.type, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
@@ -174,6 +184,7 @@ shader_bind_quad(struct shader *s)
 	if (position >= 0) {
 		glVertexAttribPointer(position, 2, GL_FLOAT, GL_FALSE, 0, NULL);
 		glEnableVertexAttribArray(position);
+		glVertexAttribDivisor(position, 0);
 	}
 }
 
@@ -448,10 +459,20 @@ render_window(SDL_Window *window)
 	}
 }
 
+struct gui_quad {
+	float xfrm[4];
+	float tfrm[4];
+	float rgba[4];
+};
+
 static GLuint gui_prg;
 static GLuint gui_vao;
 static GLuint gui_vbo;
-static float gui_data[256 * 8];
+static const size_t gui_nmax = 1024;
+static struct gui_quad gui_data[1024];
+static GLuint gui_count;
+static GLuint gui_total_count;
+static GLuint gui_draw_count;
 
 static void
 gui_init(void)
@@ -461,28 +482,40 @@ gui_init(void)
 	GLuint fshd = glCreateShader(GL_FRAGMENT_SHADER);
 	const char *vert =
 		GLSL_VERSION
-		"in vec2 a_pos;\n"
+		"layout (location = 0) in vec2 a_pos;\n"
+		"layout (location = 1) in vec4 a_xfrm;\n"
+		"layout (location = 2) in vec4 a_tfrm;\n"
+		"layout (location = 3) in vec4 a_rgba;\n"
 		"out vec2 texcoord;\n"
-		"uniform mat2 xfrm;\n"
-		"uniform mat2 tfrm;\n"
+		"out vec4 color;\n"
 		"void main() {\n"
-		"	gl_Position = vec4(a_pos*xfrm[0]+xfrm[1], 0.0, 1.0);\n"
-		"	texcoord = a_pos*tfrm[0]+tfrm[1];\n"
+		"	gl_Position = vec4(a_pos * a_xfrm.xy + a_xfrm.zw, 0.0, 1.0);\n"
+		"	texcoord = a_pos * a_tfrm.xy + a_tfrm.zw;\n"
+		"	color = a_rgba;\n"
 		"}\n";
 	const char *frag =
 		GLSL_VERSION
 		"in vec2 texcoord;\n"
+		"in vec4 color;\n"
 		"out vec4 out_color;\n"
 		"uniform sampler2D t_gui;"
 		"void main() {\n"
 		"	if (texture(t_gui, texcoord).r < 0.5) discard;\n"
-		"	out_color = vec4(vec3(1.0), 1.0);\n"
+		"	out_color = color;\n"
+//		"ivec2 p= ivec2(texcoord * textureSize(t_gui, 0));\n"
+//		"	out_color = vec4(texelFetch(t_gui, p, 0).rgb, 1.0);\n"
+//		"	out_color = vec4(texcoord, 0.0, 1.0);\n"
+//		"	out_color = vec4(texture(t_gui, texcoord).rgb, 1.0);\n"
 		"}\n";
 	const char *file = "ascii.qoi";
+	GLuint loc;
 	qoi_desc desc;
 	void *data = qoi_read(file, &desc, 3);
+
 	if (!data)
 		die("%s: qoi_read: %s\n", file, strerror(errno));
+	/* hack: set the first pixel to 0xfffff */
+	memcpy(data, (unsigned char[3]){255,255,255}, 3 * sizeof(char));
 	tex_gui = create_2drgb_tex(desc.width, desc.height, data);
 	free(data);
 
@@ -494,75 +527,175 @@ gui_init(void)
 		die("gui: error in program link\n");
 
 	gui_prg = nprg;
-	shader_bind_quad(&(struct shader){.prog=gui_prg});
-#if 0
+
+	glGenVertexArrays(1, &gui_vao);
+	glBindVertexArray(gui_vao);
+
 	glGenBuffers(1, &gui_vbo);
 	glBindBuffer(GL_ARRAY_BUFFER, gui_vbo);
 	glBufferData(GL_ARRAY_BUFFER, sizeof(gui_data), gui_data, GL_STREAM_DRAW);
-#endif
+
+	loc = 0; /* a_pos */
+	glBindBuffer(GL_ARRAY_BUFFER, quad_vbo);
+	glVertexAttribPointer(loc, 2, GL_FLOAT, GL_FALSE, 0, 0);
+	glVertexAttribDivisor(loc, 0);
+	glEnableVertexAttribArray(loc);
+
+	loc = 1; /* a_xfrm */
+	glBindBuffer(GL_ARRAY_BUFFER, gui_vbo);
+	glVertexAttribPointer(loc, 4, GL_FLOAT, GL_FALSE,
+			      sizeof(struct gui_quad), offsetof(struct gui_quad, xfrm));
+	glVertexAttribDivisor(loc, 1);
+	glEnableVertexAttribArray(loc);
+
+	loc = 2; /* a_tfrm */
+	glBindBuffer(GL_ARRAY_BUFFER, gui_vbo);
+	glVertexAttribPointer(loc, 4, GL_FLOAT, GL_FALSE,
+			      sizeof(struct gui_quad), offsetof(struct gui_quad, tfrm));
+	glVertexAttribDivisor(loc, 1);
+	glEnableVertexAttribArray(loc);
+
+	loc = 3; /* a_rgba */
+	glBindBuffer(GL_ARRAY_BUFFER, gui_vbo);
+	glVertexAttribPointer(loc, 4, GL_FLOAT, GL_FALSE,
+			      sizeof(struct gui_quad), offsetof(struct gui_quad, rgba));
+	glVertexAttribDivisor(loc, 1);
+	glEnableVertexAttribArray(loc);
+
+	glBindVertexArray(0);
+	shader_bind_quad(&(struct shader){.prog=gui_prg});
 }
 
 static void
-gui_text(int x, int y, const char *s)
+gui_flush_draw_queue(void)
 {
-	GLuint sprg = gui_prg;
-	float *v = gui_data;
-	size_t n = 0;
-	GLint utex = glGetUniformLocation(sprg, "t_gui");
-	float xfrm[2][2];
-	GLint xloc = glGetUniformLocation(sprg, "xfrm");
-	float tfrm[2][2];
-	GLint tloc = glGetUniformLocation(sprg, "tfrm");
-	int w, h;
-
-	SDL_GL_GetDrawableSize(win_ctrl, &w, &h);
-
-	glUseProgram(sprg);
-	glBindVertexArray(quad_vao);
+	GLint utex = glGetUniformLocation(gui_prg, "t_gui");
+	glUseProgram(gui_prg);
 	if (utex >= 0) {
 		glActiveTexture(GL_TEXTURE0 + tex_gui.unit);
-		glProgramUniform1i(sprg, utex, tex_gui.unit);
+		glProgramUniform1i(gui_prg, utex, tex_gui.unit);
 		glBindTexture(tex_gui.type, tex_gui.id);
 	}
+	glBindVertexArray(gui_vao);
 
-	float ex = 2.0*32.0/(float)w, ey = 2.0*32.0/(float)h;
+	glBufferData(GL_ARRAY_BUFFER, gui_count*sizeof(struct gui_quad), gui_data, GL_STREAM_DRAW);
+	glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, gui_count);
+	gui_total_count += gui_count;
+	gui_draw_count++;
+	gui_count = 0;
+}
+
+static void
+gui_push_quad(struct gui_quad q)
+{
+	gui_data[gui_count++] = q;
+	if (gui_count == gui_nmax)
+		gui_flush_draw_queue();
+}
+
+static void
+gui_rect(int x, int y, int ex, int ey, float rgba[4])
+{
+	int w, h;
+	SDL_GL_GetDrawableSize(win_ctrl, &w, &h);
+
+	struct gui_quad q;
+
+	q.xfrm[0] = (ex/(float)w);
+	q.xfrm[1] = -(ey/(float)h);
+	q.xfrm[2] = -1.0 + x/(float)w;
+	q.xfrm[3] = +1.0 - y/(float)h;
+
+	q.tfrm[0] = 0.0;
+	q.tfrm[1] = 0.0;
+	q.tfrm[2] = 0.0;
+	q.tfrm[3] = 0.0;
+
+	q.rgba[0] = rgba[0];
+	q.rgba[1] = rgba[1];
+	q.rgba[2] = rgba[2];
+	q.rgba[3] = rgba[3];
+
+	gui_push_quad(q);
+}
+float FW = 7.0*6.0;
+float FH = 9.0*6.0;
+static void
+gui_text(int x, int y, const char *s)
+{
+	int w, h;
+	SDL_GL_GetDrawableSize(win_ctrl, &w, &h);
+
+	float ex = FW/(float)w, ey = FH/(float)h;
 	float ox = x/(float)w, oy = y/(float)h;
 	float tw = 1.0/16.0, th = 1.0/6.0;
 	float tx, ty;
 
 	for (;*s; s++) {
-		xfrm[0][0] = ex;
-		xfrm[0][1] = -ey;
-		xfrm[1][0] = -1 + ox;
-		xfrm[1][1] = +1 - oy;
-		if (xloc >= 0)
-			glUniformMatrix2fv(xloc, 1, GL_FALSE, (float *)&xfrm);
+		struct gui_quad q;
+		q.xfrm[0] = ex;
+		q.xfrm[1] = -ey;
+		q.xfrm[2] = -1.0 + ox;
+		q.xfrm[3] = +1.0 - oy;
 
+		ox += ex;
+		if (*s <= ' ') continue;
 		tx = ((int)(*s - ' ') % 16) / 16.0;
 		ty = ((int)(*s - ' ') / 16) / 6.0;
-		tfrm[0][0] = tw;
-		tfrm[0][1] = th;
-		tfrm[1][0] = -1 + tx;
-		tfrm[1][1] = +1 + ty;
-		if (tloc >= 0)
-			glUniformMatrix2fv(tloc, 1, GL_FALSE, (float *)&tfrm);
+		q.tfrm[0] = tw;
+		q.tfrm[1] = th;
+		q.tfrm[2] = tx;
+		q.tfrm[3] = ty;
 
-		glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+		q.rgba[0] = 1.0;
+		q.rgba[1] = 1.0;
+		q.rgba[2] = 1.0;
+		q.rgba[3] = 1.0;
 
-		ox+=ex;
+		gui_push_quad(q);
 	}
 }
 
 static void
 render(void)
 {
-//	render_window(win_live);
-//	SDL_GL_SwapWindow(win_live);
-
+	char buf[64];
+	size_t inst_nb = gui_total_count;
+	size_t draw_nb = gui_draw_count;
+	gui_total_count = 0;
+	gui_draw_count = 0;
+#if 0 /* currently hacking on control window */
+	render_window(win_live);
+	SDL_GL_SwapWindow(win_live);
+#endif
 	render_window(win_ctrl);
-	for (int i = 0; i < 100; i++)
-		gui_text(4*i, 32*i, "!\"#$%&'()*+,-./test instanced text !");
-	gui_text(64, 64, "instanced text !");
+	int i;
+	for (i = 0; i < 50; i++)
+		gui_text(i, FH*i, "!\"#$%&'()*+,-./test instanced text! 0123456789 call me :3 AAAA IN CNAME :P");
+
+	gui_rect(FW, FH, FW*strlen("instanced text ?"), FH, (float[4]){0,0.5,0.1,1});
+	gui_text(FW, FH, "instanced text ?");
+
+	gui_rect(FW, 3*FH, FW*strlen("instanced everything !"), FH, (float[4]){0.7,0.2,0.2,0.5});
+	gui_text(FW, 3*FH, "instanced everything !");
+
+	int x = 2*64, y=4*64;
+	gui_rect(x, y, FW*40, FH*15, (float[4]){0.1,0.1,0.1,1});
+	gui_rect(x, y, FW*40, FH*2,    (float[4]){0.2,0.2,0.2,2});
+	gui_text(x+FW/2, y+FH/2, "Title goes weee!");
+	gui_text(x+(FW*39)-FW/2, y+FH/2, "X");
+	i = 1;
+	x+=FW/2; y+=FH/2;
+	gui_text(x, y+FH*(++i), "don't get you foold,");
+	gui_text(x, y+FH*(++i), "this is not a real gui ... yet");
+	gui_text(x, y+FH*(++i), "");
+	gui_text(x, y+FH*(++i), "this has been provided to you with:");
+	snprintf(buf, sizeof(buf), " - %d instances", inst_nb);
+	gui_text(x, y+FH*(++i), buf);
+	snprintf(buf, sizeof(buf), " - %d glDrawInstanced calls", draw_nb);
+	gui_text(x, y+FH*(++i), buf);
+
+	gui_flush_draw_queue();
 	SDL_GL_SwapWindow(win_ctrl);
 }
 
