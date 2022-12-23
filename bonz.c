@@ -13,8 +13,7 @@
 #include <SDL.h>
 
 #undef offsetof
-#define offsetof(type, memb) ((void *)__builtin_offsetof(type, memb))
-#define OFF offsetof
+#define offsetof(type, memb) __builtin_offsetof(type, memb)
 
 #define LEN(a) (sizeof(a)/sizeof(*a))
 
@@ -544,21 +543,24 @@ gui_init(void)
 	loc = 1; /* a_xfrm */
 	glBindBuffer(GL_ARRAY_BUFFER, gui_vbo);
 	glVertexAttribPointer(loc, 4, GL_FLOAT, GL_FALSE,
-			      sizeof(struct gui_quad), offsetof(struct gui_quad, xfrm));
+			      sizeof(struct gui_quad),
+			      (void *)offsetof(struct gui_quad, xfrm));
 	glVertexAttribDivisor(loc, 1);
 	glEnableVertexAttribArray(loc);
 
 	loc = 2; /* a_tfrm */
 	glBindBuffer(GL_ARRAY_BUFFER, gui_vbo);
 	glVertexAttribPointer(loc, 4, GL_FLOAT, GL_FALSE,
-			      sizeof(struct gui_quad), offsetof(struct gui_quad, tfrm));
+			      sizeof(struct gui_quad),
+			      (void *)offsetof(struct gui_quad, tfrm));
 	glVertexAttribDivisor(loc, 1);
 	glEnableVertexAttribArray(loc);
 
 	loc = 3; /* a_rgba */
 	glBindBuffer(GL_ARRAY_BUFFER, gui_vbo);
 	glVertexAttribPointer(loc, 4, GL_FLOAT, GL_FALSE,
-			      sizeof(struct gui_quad), offsetof(struct gui_quad, rgba));
+			      sizeof(struct gui_quad),
+			      (void *)offsetof(struct gui_quad, rgba));
 	glVertexAttribDivisor(loc, 1);
 	glEnableVertexAttribArray(loc);
 
@@ -601,8 +603,8 @@ gui_rect(int x, int y, int ex, int ey, float rgba[4])
 
 	struct gui_quad q;
 
-	q.xfrm[0] = (ex/(float)w);
-	q.xfrm[1] = -(ey/(float)h);
+	q.xfrm[0] = ((ex+0.5)/(float)w);
+	q.xfrm[1] = -((ey+0.5)/(float)h);
 	q.xfrm[2] = -1.0 + x/(float)w;
 	q.xfrm[3] = +1.0 - y/(float)h;
 
@@ -633,8 +635,8 @@ gui_text(int x, int y, const char *s)
 
 	for (;*s; s++) {
 		struct gui_quad q;
-		q.xfrm[0] = ex;
-		q.xfrm[1] = -ey;
+		q.xfrm[0] = (ex+0.5/(float)w);
+		q.xfrm[1] = -(ey+0.5/(float)h);
 		q.xfrm[2] = -1.0 + ox;
 		q.xfrm[3] = +1.0 - oy;
 
