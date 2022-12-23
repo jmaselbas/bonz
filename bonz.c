@@ -464,6 +464,29 @@ struct gui_quad {
 	float rgba[4];
 };
 
+struct gui_cmd {
+	enum gui_cmd_type {
+		GUI_RECT,
+		GUI_TEXT,
+		GUI_COLOR,
+	} type;
+	union {
+		struct {
+			uint8_t r,g,b,a;
+		} color;
+		struct {
+			int16_t x, y;
+			uint16_t w, h;
+		} rect;
+		struct {
+			int16_t x, y;
+			uint8_t len;
+			char str[];
+		} text;
+	};
+};
+static struct gui_cmd gui_cmd_queue[4096];
+static size_t gui_cmd_queue_size;
 static GLuint gui_prg;
 static GLuint gui_vao;
 static GLuint gui_vbo;
@@ -472,6 +495,96 @@ static struct gui_quad gui_data[1024];
 static GLuint gui_count;
 static GLuint gui_total_count;
 static GLuint gui_draw_count;
+
+static void
+gui_begin(void)
+{
+	gui_cmd_queue_size = 0;
+	gui_total_count = 0;
+	gui_draw_count = 0;
+}
+
+static size_t
+gui_cmd_size(struct gui_cmd *cmd)
+{
+	size_t s = sizeof(*cmd);
+
+	if (cmd->type == GUI_TEXT)
+		s += cmd->text.len;
+
+	return s;
+}
+
+#define gui_cmd_queue_end() (((void *)gui_cmd_queue) + gui_cmd_queue_size)
+
+static struct gui_cmd *
+gui_cmd_next(struct gui_cmd *cmd)
+{
+	if (cmd)
+		cmd = ((void *)cmd) + gui_cmd_size(cmd);
+	if (((void *)cmd) >= gui_cmd_queue_end())
+		return NULL;
+	return cmd;
+}
+
+#define gui_for_each_cmd(c) for ((c) = gui_cmd_queue; (c); (c) = gui_cmd_next(c))
+
+static void
+gui_text(int x, int y, const char *s)
+{
+	struct gui_cmd *cmd = gui_cmd_queue_end();
+	size_t tlen = strlen(s);
+	while (tlen > 0) {
+		size_t len = tlen > UINT8_MAX ? UINT8_MAX : tlen;
+		size_t size = len + sizeof(struct gui_cmd);
+		if (gui_cmd_queue_size + size > sizeof(gui_cmd_queue)) {
+			printf("!!\n");
+			return;
+		}
+		cmd->type = GUI_TEXT;
+		cmd->text.x = x;
+		cmd->text.y = y;
+		cmd->text.len = len;
+		memcpy(cmd->text.str, s, len);
+
+		tlen -= len;
+		s += len;
+
+		gui_cmd_queue_size += size;
+	}
+}
+
+static void
+gui_rect(int x, int y, unsigned int w, unsigned int h)
+{
+	struct gui_cmd *cmd = gui_cmd_queue_end();
+	size_t size = sizeof(struct gui_cmd);
+	if (gui_cmd_queue_size + size > sizeof(gui_cmd_queue))
+		return;
+	cmd->type = GUI_RECT;
+	cmd->rect.x = x;
+	cmd->rect.y = y;
+	cmd->rect.w = w;
+	cmd->rect.h = h;
+
+	gui_cmd_queue_size += size;
+}
+
+static void
+gui_color(uint8_t r, uint8_t g, uint8_t b, uint8_t a)
+{
+	struct gui_cmd *cmd = gui_cmd_queue_end();
+	size_t size = sizeof(struct gui_cmd);
+	if (gui_cmd_queue_size + size > sizeof(gui_cmd_queue))
+		return;
+	cmd->type = GUI_COLOR;
+	cmd->color.r = r;
+	cmd->color.g = g;
+	cmd->color.b = b;
+	cmd->color.a = a;
+
+	gui_cmd_queue_size += size;
+}
 
 static void
 gui_init(void)
@@ -513,7 +626,7 @@ gui_init(void)
 
 	if (!data)
 		die("%s: qoi_read: %s\n", file, strerror(errno));
-	/* hack: set the first pixel to 0xfffff */
+	/* hack: set the first pixel to 0xffffff */
 	memcpy(data, (unsigned char[3]){255,255,255}, 3 * sizeof(char));
 	tex_gui = create_2drgb_tex(desc.width, desc.height, data);
 	free(data);
@@ -571,15 +684,6 @@ gui_init(void)
 static void
 gui_flush_draw_queue(void)
 {
-	GLint utex = glGetUniformLocation(gui_prg, "t_gui");
-	glUseProgram(gui_prg);
-	if (utex >= 0) {
-		glActiveTexture(GL_TEXTURE0 + tex_gui.unit);
-		glProgramUniform1i(gui_prg, utex, tex_gui.unit);
-		glBindTexture(tex_gui.type, tex_gui.id);
-	}
-	glBindVertexArray(gui_vao);
-
 	glBufferData(GL_ARRAY_BUFFER, gui_count*sizeof(struct gui_quad), gui_data, GL_STREAM_DRAW);
 	glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, gui_count);
 	gui_total_count += gui_count;
@@ -591,71 +695,78 @@ static void
 gui_push_quad(struct gui_quad q)
 {
 	gui_data[gui_count++] = q;
-	if (gui_count == gui_nmax)
+	if (gui_count == gui_nmax) {
 		gui_flush_draw_queue();
+	}
 }
 
-static void
-gui_rect(int x, int y, int ex, int ey, float rgba[4])
-{
-	int w, h;
-	SDL_GL_GetDrawableSize(win_ctrl, &w, &h);
-
-	struct gui_quad q;
-
-	q.xfrm[0] = ((ex+0.5)/(float)w);
-	q.xfrm[1] = -((ey+0.5)/(float)h);
-	q.xfrm[2] = -1.0 + x/(float)w;
-	q.xfrm[3] = +1.0 - y/(float)h;
-
-	q.tfrm[0] = 0.0;
-	q.tfrm[1] = 0.0;
-	q.tfrm[2] = 0.0;
-	q.tfrm[3] = 0.0;
-
-	q.rgba[0] = rgba[0];
-	q.rgba[1] = rgba[1];
-	q.rgba[2] = rgba[2];
-	q.rgba[3] = rgba[3];
-
-	gui_push_quad(q);
-}
 float FW = 7.0*6.0;
 float FH = 9.0*6.0;
+
 static void
-gui_text(int x, int y, const char *s)
+gui_draw(void)
 {
 	int w, h;
 	SDL_GL_GetDrawableSize(win_ctrl, &w, &h);
-
-	float ex = FW/(float)w, ey = FH/(float)h;
-	float ox = x/(float)w, oy = y/(float)h;
-	float tw = 1.0/16.0, th = 1.0/6.0;
-	float tx, ty;
-
-	for (;*s; s++) {
-		struct gui_quad q;
-		q.xfrm[0] = (ex+0.5/(float)w);
-		q.xfrm[1] = -(ey+0.5/(float)h);
-		q.xfrm[2] = -1.0 + ox;
-		q.xfrm[3] = +1.0 - oy;
-
-		ox += ex;
-		if (*s <= ' ') continue;
-		tx = ((int)(*s - ' ') % 16) / 16.0;
-		ty = ((int)(*s - ' ') / 16) / 6.0;
-		q.tfrm[0] = tw;
-		q.tfrm[1] = th;
-		q.tfrm[2] = tx;
-		q.tfrm[3] = ty;
-
-		q.rgba[0] = 1.0;
-		q.rgba[1] = 1.0;
-		q.rgba[2] = 1.0;
-		q.rgba[3] = 1.0;
-
-		gui_push_quad(q);
+	struct gui_cmd *cmd;
+	size_t i;
+	struct gui_quad q = {
+		.rgba = { 1.0, 1.0, 1.0, 1.0 },
+	};
+	GLint utex = glGetUniformLocation(gui_prg, "t_gui");
+	glUseProgram(gui_prg);
+	if (utex >= 0) {
+		glActiveTexture(GL_TEXTURE0 + tex_gui.unit);
+		glProgramUniform1i(gui_prg, utex, tex_gui.unit);
+		glBindTexture(tex_gui.type, tex_gui.id);
 	}
+	glBindVertexArray(gui_vao);
+
+	if (gui_cmd_queue_size == 0)
+		return;
+
+	gui_for_each_cmd(cmd) {
+		float ox;
+		char c;
+		switch (cmd->type) {
+		case GUI_COLOR:
+			q.rgba[0] = cmd->color.r / 255.0;
+			q.rgba[1] = cmd->color.g / 255.0;
+			q.rgba[2] = cmd->color.b / 255.0;
+			q.rgba[3] = cmd->color.a / 255.0;
+			break;
+		case GUI_TEXT:
+			ox = cmd->text.x;
+			for (i = 0; i < cmd->text.len; i++) {
+				c = cmd->text.str[i];
+				q.xfrm[0] = +(FW+0.5)/(float)w;
+				q.xfrm[1] = -(FH+0.5)/(float)h;
+				q.xfrm[2] = -1.0 + ox/(float)w;
+				q.xfrm[3] = +1.0 - cmd->text.y/(float)h;
+
+				ox += FW;
+				if (c <= ' ') continue;
+				q.tfrm[0] = 1.0/16.0;
+				q.tfrm[1] = 1.0/6.0;
+				q.tfrm[2] = ((int)(c - ' ') % 16) / 16.0;
+				q.tfrm[3] = ((int)(c - ' ') / 16) / 6.0;
+				gui_push_quad(q);
+			}
+			break;
+		case GUI_RECT:
+			q.xfrm[0] = +((cmd->rect.w+0.5)/(float)w);
+			q.xfrm[1] = -((cmd->rect.h+0.5)/(float)h);
+			q.xfrm[2] = -1.0 + cmd->rect.x/(float)w;
+			q.xfrm[3] = +1.0 - cmd->rect.y/(float)h;
+			q.tfrm[0] = 0;
+			q.tfrm[1] = 0;
+			q.tfrm[2] = 0;
+			q.tfrm[3] = 0;
+			gui_push_quad(q);
+			break;
+		}
+	}
+	gui_flush_draw_queue();
 }
 
 static void
@@ -664,26 +775,36 @@ render(void)
 	char buf[64];
 	size_t inst_nb = gui_total_count;
 	size_t draw_nb = gui_draw_count;
-	gui_total_count = 0;
-	gui_draw_count = 0;
 #if 0 /* currently hacking on control window */
 	render_window(win_live);
 	SDL_GL_SwapWindow(win_live);
 #endif
 	render_window(win_ctrl);
+	gui_begin();
+	float time = get_time() / 10.0;
+	FW = 7.0*6.0 + 10*sin(time);
+	FH = 9.0*6.0 + 10*sin(time);
+
 	int i;
 	for (i = 0; i < 50; i++)
 		gui_text(i, FH*i, "!\"#$%&'()*+,-./test instanced text! 0123456789 call me :3 AAAA IN CNAME :P");
 
-	gui_rect(FW, FH, FW*strlen("instanced text ?"), FH, (float[4]){0,0.5,0.1,1});
+	gui_color(0, 128, 25, 255);
+	gui_rect(FW, FH, FW*strlen("instanced text ?"), FH);
+	gui_color(255, 255, 255, 255);
 	gui_text(FW, FH, "instanced text ?");
 
-	gui_rect(FW, 3*FH, FW*strlen("instanced everything !"), FH, (float[4]){0.7,0.2,0.2,0.5});
+	gui_color(0.7*255, 50, 50, 255);
+	gui_rect(FW, 3*FH, FW*strlen("instanced everything !"), FH);
+	gui_color(255, 255, 255, 255);
 	gui_text(FW, 3*FH, "instanced everything !");
 
 	int x = 2*64, y=4*64;
-	gui_rect(x, y, FW*40, FH*15, (float[4]){0.1,0.1,0.1,1});
-	gui_rect(x, y, FW*40, FH*2,    (float[4]){0.2,0.2,0.2,2});
+	gui_color(25, 25, 25, 255);
+	gui_rect(x, y, FW*40, FH*15);
+	gui_color(50, 50, 50, 255);
+	gui_rect(x, y, FW*40, FH*2);
+	gui_color(255, 255, 255, 255);
 	gui_text(x+FW/2, y+FH/2, "Title goes weee!");
 	gui_text(x+(FW*39)-FW/2, y+FH/2, "X");
 	i = 1;
@@ -692,12 +813,12 @@ render(void)
 	gui_text(x, y+FH*(++i), "this is not a real gui ... yet");
 	gui_text(x, y+FH*(++i), "");
 	gui_text(x, y+FH*(++i), "this has been provided to you with:");
-	snprintf(buf, sizeof(buf), " - %d instances", inst_nb);
+	snprintf(buf, sizeof(buf), " - %ld instances", inst_nb);
 	gui_text(x, y+FH*(++i), buf);
-	snprintf(buf, sizeof(buf), " - %d glDrawInstanced calls", draw_nb);
+	snprintf(buf, sizeof(buf), " - %ld glDrawInstanced calls", draw_nb);
 	gui_text(x, y+FH*(++i), buf);
 
-	gui_flush_draw_queue();
+	gui_draw();
 	SDL_GL_SwapWindow(win_ctrl);
 }
 
