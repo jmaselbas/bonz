@@ -16,6 +16,8 @@
 #define offsetof(type, memb) __builtin_offsetof(type, memb)
 
 #define LEN(a) (sizeof(a)/sizeof(*a))
+#define MAX(a,b) ((a)>(b) ? (a) : (b))
+#define MIN(a,b) ((a)<(b) ? (a) : (b))
 
 #define GLSL_VERSION "#version 400 core\n"
 
@@ -32,7 +34,20 @@ unsigned int default_height = 800;
 
 SDL_GLContext gl_ctx;
 double time_start;
+double xpos, ypos;
+int buttons[8];
 
+static inline int
+mouse_click(int b)
+{
+	return buttons[b] == SDL_PRESSED;
+}
+static inline int mouse_left_click(void) { return mouse_click(1); }
+static inline int mouse_middle_click(void) { return mouse_click(2); }
+static inline int mouse_right_click(void) { return mouse_click(3); }
+
+float fps[64];
+size_t fps_count;
 int verbose;
 char *argv0;
 GLuint quad_vao;
@@ -289,7 +304,7 @@ shader_init(void)
 		"in vec2 a_pos;\n"
 		"out vec2 texcoord;\n"
 		"void main() {\n"
-		"	gl_Position = vec4(a_pos * 2.0 - 1.0, 0.0, 1.0);\n"
+		"	gl_Position = vec4(a_pos - 0.5, 0.0, 0.5);\n"
 		"	texcoord = a_pos;\n"
 		"}\n";
 
@@ -371,8 +386,12 @@ input(void)
 			break;
 		case SDL_KEYUP:
 		case SDL_MOUSEMOTION:
+			xpos = e.motion.x;
+			ypos = e.motion.y;
+			break;
 		case SDL_MOUSEBUTTONDOWN:
 		case SDL_MOUSEBUTTONUP:
+			buttons[e.button.button] = e.button.state;
 			break;
 		}
 	}
@@ -466,6 +485,7 @@ struct gui_quad {
 
 struct gui_cmd {
 	enum gui_cmd_type {
+		GUI_CLIP,
 		GUI_RECT,
 		GUI_TEXT,
 		GUI_COLOR,
@@ -474,10 +494,10 @@ struct gui_cmd {
 		struct {
 			uint8_t r,g,b,a;
 		} color;
-		struct {
+		struct gui_rect {
 			int16_t x, y;
 			uint16_t w, h;
-		} rect;
+		} rect, clip;
 		struct {
 			int16_t x, y;
 			uint8_t len;
@@ -571,6 +591,22 @@ gui_rect(int x, int y, unsigned int w, unsigned int h)
 }
 
 static void
+gui_clip(int x, int y, unsigned int w, unsigned int h)
+{
+	struct gui_cmd *cmd = gui_cmd_queue_end();
+	size_t size = sizeof(struct gui_cmd);
+	if (gui_cmd_queue_size + size > sizeof(gui_cmd_queue))
+		return;
+	cmd->type = GUI_CLIP;
+	cmd->rect.x = x;
+	cmd->rect.y = y;
+	cmd->rect.w = w;
+	cmd->rect.h = h;
+
+	gui_cmd_queue_size += size;
+}
+
+static void
 gui_color(uint8_t r, uint8_t g, uint8_t b, uint8_t a)
 {
 	struct gui_cmd *cmd = gui_cmd_queue_end();
@@ -601,7 +637,7 @@ gui_init(void)
 		"out vec2 texcoord;\n"
 		"out vec4 color;\n"
 		"void main() {\n"
-		"	gl_Position = vec4(a_pos * a_xfrm.xy + a_xfrm.zw, 0.0, 1.0);\n"
+		"	gl_Position = vec4(a_pos * a_xfrm.xy + a_xfrm.zw, 0.0, 0.5);\n"
 		"	texcoord = a_pos * a_tfrm.xy + a_tfrm.zw;\n"
 		"	color = a_rgba;\n"
 		"}\n";
@@ -691,17 +727,30 @@ gui_flush_draw_queue(void)
 	gui_count = 0;
 }
 
+static int
+gui_rect_overlap(struct gui_rect a, struct gui_rect b)
+{
+	return (a.x <= (b.x + b.w) && b.x <= (a.x + a.w))
+		&& (a.y <= (b.y + b.h) && b.y <= (a.y + a.h));
+}
+
+static int
+gui_mouse_in(struct gui_rect a)
+{
+	struct gui_rect m = { .x = xpos, .y = ypos, .w = 0, .h = 0 };
+	return gui_rect_overlap(a, m);
+}
+
 static void
 gui_push_quad(struct gui_quad q)
 {
 	gui_data[gui_count++] = q;
-	if (gui_count == gui_nmax) {
+	if (gui_count == gui_nmax)
 		gui_flush_draw_queue();
-	}
 }
 
-float FW = 7.0*6.0;
-float FH = 9.0*6.0;
+static float FW = 7.0;
+static float FH = 9.0;
 
 static void
 gui_draw(void)
@@ -709,7 +758,7 @@ gui_draw(void)
 	int w, h;
 	SDL_GL_GetDrawableSize(win_ctrl, &w, &h);
 	struct gui_cmd *cmd;
-	size_t i;
+	struct gui_rect r, clip = { 0, 0, w, h };
 	struct gui_quad q = {
 		.rgba = { 1.0, 1.0, 1.0, 1.0 },
 	};
@@ -725,10 +774,18 @@ gui_draw(void)
 	if (gui_cmd_queue_size == 0)
 		return;
 
+//	glScissor(clip.x, h - clip.y - clip.h, clip.w, clip.h);
+
 	gui_for_each_cmd(cmd) {
+		size_t i;
 		float ox;
 		char c;
 		switch (cmd->type) {
+		case GUI_CLIP:
+			clip = cmd->clip;
+			//glEnable(GL_SCISSOR_TEST);
+			//glScissor(clip.x, h - clip.y - clip.h, clip.w, clip.h);
+			break;
 		case GUI_COLOR:
 			q.rgba[0] = cmd->color.r / 255.0;
 			q.rgba[1] = cmd->color.g / 255.0;
@@ -737,36 +794,99 @@ gui_draw(void)
 			break;
 		case GUI_TEXT:
 			ox = cmd->text.x;
-			for (i = 0; i < cmd->text.len; i++) {
+			for (i = 0; i < cmd->text.len; i++, ox += FW) {
 				c = cmd->text.str[i];
 				q.xfrm[0] = +(FW+0.5)/(float)w;
 				q.xfrm[1] = -(FH+0.5)/(float)h;
-				q.xfrm[2] = -1.0 + ox/(float)w;
-				q.xfrm[3] = +1.0 - cmd->text.y/(float)h;
+				q.xfrm[2] = -0.5 + ox/(float)w;
+				q.xfrm[3] = +0.5 - cmd->text.y/(float)h;
 
-				ox += FW;
 				if (c <= ' ') continue;
 				q.tfrm[0] = 1.0/16.0;
 				q.tfrm[1] = 1.0/6.0;
 				q.tfrm[2] = ((int)(c - ' ') % 16) / 16.0;
 				q.tfrm[3] = ((int)(c - ' ') / 16) / 6.0;
-				gui_push_quad(q);
+
+				r.x = ox;
+				r.y = cmd->text.y;
+				r.w = FW;
+				r.h = FH;
+				if (gui_rect_overlap(r, clip))
+					gui_push_quad(q);
 			}
 			break;
 		case GUI_RECT:
 			q.xfrm[0] = +((cmd->rect.w+0.5)/(float)w);
 			q.xfrm[1] = -((cmd->rect.h+0.5)/(float)h);
-			q.xfrm[2] = -1.0 + cmd->rect.x/(float)w;
-			q.xfrm[3] = +1.0 - cmd->rect.y/(float)h;
+			q.xfrm[2] = -0.5 + cmd->rect.x/(float)w;
+			q.xfrm[3] = +0.5 - cmd->rect.y/(float)h;
 			q.tfrm[0] = 0;
 			q.tfrm[1] = 0;
 			q.tfrm[2] = 0;
 			q.tfrm[3] = 0;
-			gui_push_quad(q);
+
+			if (gui_rect_overlap(cmd->rect, clip))
+				gui_push_quad(q);
+
 			break;
 		}
 	}
 	gui_flush_draw_queue();
+
+//	glScissor(0, 0, w, h);
+}
+
+static void
+gui_draw_grid_elem(int idx, int px, int py, size_t sz)
+{
+	if (&shaders[idx] == shader) {
+		gui_color(255, 0, 0, 255);
+		gui_rect(px-4, py-4, sz+8, sz+8);
+	}
+	if (idx < shader_count)
+		gui_color(128,128,128,255);
+	else
+		gui_color(20,20,20,255);
+	if (idx < shader_count && gui_mouse_in((struct gui_rect){px, py, sz, sz})) {
+		gui_color(250,20,20,255);
+		if (mouse_left_click())
+			shader = &shaders[idx];
+	}
+
+	gui_rect(px, py, sz, sz);
+	if (idx < shader_count) {
+		char buf[] = "123467890";
+		snprintf(buf, sizeof(buf), "%d", shaders[idx].prog);
+		gui_rect(px, py, FW * strlen(buf), FH);
+
+		gui_rect(px, py+sz, FW * strlen(shaders[idx].name), FH);
+		gui_color(255, 255, 255,255);
+		gui_text(px, py+sz, shaders[idx].name);
+		gui_text(px, py, buf);
+	}
+}
+
+static void
+gui_view_grid(void)
+{
+	size_t size, i;
+	int ix, iy;
+	int px, py;
+	int padx, pady;
+	int w, h;
+	SDL_GL_GetDrawableSize(win_ctrl, &w, &h);
+
+	size = MIN(w / (2*4+5), h / (2*4+5));
+
+	padx = (w - (2*4+5) * size) / 2;
+	pady = (h - (2*4+5) * size) / 2;
+	for (i = 0; i < LEN(shaders); i++) {
+		ix = i % 4;
+		iy = i / 4;
+		px = ix*(3 * size) + size + padx;
+		py = iy*(3 * size) + size + pady;
+		gui_draw_grid_elem(i, px, py, 2*size);
+	}
 }
 
 static void
@@ -775,49 +895,33 @@ render(void)
 	char buf[64];
 	size_t inst_nb = gui_total_count;
 	size_t draw_nb = gui_draw_count;
-#if 0 /* currently hacking on control window */
+#if 1 /* currently hacking on control window */
 	render_window(win_live);
 	SDL_GL_SwapWindow(win_live);
 #endif
 	render_window(win_ctrl);
 	gui_begin();
-	float time = get_time() / 10.0;
-	FW = 7.0*6.0 + 10*sin(time);
-	FH = 9.0*6.0 + 10*sin(time);
 
-	int i;
-	for (i = 0; i < 50; i++)
-		gui_text(i, FH*i, "!\"#$%&'()*+,-./test instanced text! 0123456789 call me :3 AAAA IN CNAME :P");
+//	gui_toggle("verbose", &verbose);
+#if 0
+//	gui_color(255,0,250,255);
+//	gui_rect(xpos, ypos, 64, 64);
+//	gui_clip(xpos, ypos, 200, 200);
 
-	gui_color(0, 128, 25, 255);
-	gui_rect(FW, FH, FW*strlen("instanced text ?"), FH);
-	gui_color(255, 255, 255, 255);
-	gui_text(FW, FH, "instanced text ?");
+	gui_color(210,10,10,255);
+	gui_rect(0, 0, LEN(fps), 30);
+	gui_color(255,255,255,255);
 
-	gui_color(0.7*255, 50, 50, 255);
-	gui_rect(FW, 3*FH, FW*strlen("instanced everything !"), FH);
-	gui_color(255, 255, 255, 255);
-	gui_text(FW, 3*FH, "instanced everything !");
-
-	int x = 2*64, y=4*64;
-	gui_color(25, 25, 25, 255);
-	gui_rect(x, y, FW*40, FH*15);
-	gui_color(50, 50, 50, 255);
-	gui_rect(x, y, FW*40, FH*2);
-	gui_color(255, 255, 255, 255);
-	gui_text(x+FW/2, y+FH/2, "Title goes weee!");
-	gui_text(x+(FW*39)-FW/2, y+FH/2, "X");
-	i = 1;
-	x+=FW/2; y+=FH/2;
-	gui_text(x, y+FH*(++i), "don't get you foold,");
-	gui_text(x, y+FH*(++i), "this is not a real gui ... yet");
-	gui_text(x, y+FH*(++i), "");
-	gui_text(x, y+FH*(++i), "this has been provided to you with:");
-	snprintf(buf, sizeof(buf), " - %ld instances", inst_nb);
-	gui_text(x, y+FH*(++i), buf);
-	snprintf(buf, sizeof(buf), " - %ld glDrawInstanced calls", draw_nb);
-	gui_text(x, y+FH*(++i), buf);
-
+	float f, tf = 0;
+	for (int i = 0; i < LEN(fps); i++) {
+		tf += f = fps[(fps_count+i)%LEN(fps)];
+		gui_rect(i, 0.25 * f, 1, 0.25 * MAX(120.0 - f, 0.0));
+	}
+	tf /= LEN(fps);
+	snprintf(buf, sizeof(buf), "%2.0ffps", tf);
+	gui_text(LEN(fps), 0, buf);
+#endif
+	gui_view_grid();
 	gui_draw();
 	SDL_GL_SwapWindow(win_ctrl);
 }
@@ -1010,13 +1114,12 @@ sdl_gl_init(void)
 		die("GL init failed\n");
 
 	win_live = window;
-#if 1
+#if 0
 	win_ctrl = win_live;
 #else
 	win_ctrl = SDL_CreateWindow("ctrl", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
 				    default_width, default_height,
 				    SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
-	}
 #endif
 }
 
@@ -1069,6 +1172,7 @@ is_file(const char *file)
 int
 main(int argc, char **argv)
 {
+	float prev_time, curr_time;
 	size_t i;
 
 	argv0 = argv[0];
@@ -1087,10 +1191,15 @@ main(int argc, char **argv)
 
 	init();
 	while (1) {
+		prev_time = curr_time;
+		curr_time = get_time();
+
 		input();
 		for (i = 0; i < shader_count; i++)
 			shader_poll(&shaders[i]);
 		render();
+		fps[fps_count++] = (1.0 / (curr_time - prev_time));
+		fps_count %= LEN(fps);
 	}
 	fini();
 
