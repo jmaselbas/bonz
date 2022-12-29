@@ -62,6 +62,8 @@ struct shader {
 };
 size_t shader_count;
 struct shader shaders[16];
+GLuint shaders_fbo;
+struct texture tex_shd;
 struct shader *shader;
 
 struct texture tex_gui;
@@ -92,8 +94,6 @@ jack_port_t *midi_port;
 jack_port_t *input_port;
 
 #include "qoi.h"
-
-static void gui_text(int x, int y, const char *s);
 
 static void fini(void);
 
@@ -321,6 +321,9 @@ shader_init(void)
 		die("error in vertex shader\n");
 
 	glEnable(GL_BLEND);
+
+	tex_shd = create_2drgb_tex(128, 1 + LEN(shaders) * 128, NULL);
+	glGenFramebuffers(1, &shaders_fbo);
 }
 
 static void
@@ -448,15 +451,26 @@ update_shader(struct shader *s)
 		update_1dr32_tex(&tex_snd, fftw_in, LEN(fftw_in));
 		glProgramUniform1i(sprg, loc, tex_snd.unit);
 	}
+
+	loc = glGetUniformLocation(sprg, "texASCII");
+	if (loc >= 0) {
+		glActiveTexture(GL_TEXTURE0 + tex_gui.unit);
+		glProgramUniform1i(sprg, loc, tex_gui.unit);
+	}
 }
 
 static void
 render_shader(struct shader *s, int x, int y, int w, int h)
 {
-	GLint loc = glGetUniformLocation(s->prog, "v2Resolution");
+	GLint loc;
+	loc = glGetUniformLocation(s->prog, "v2Resolution");
 	if (loc >= 0)
-		glProgramUniform2f(s->prog, loc, w-x, h-y);
+		glProgramUniform2f(s->prog, loc, w, h);
+	loc = glGetUniformLocation(s->prog, "viewport");
+	if (loc >= 0)
+		glProgramUniform4f(s->prog, loc, x, y, w, h);
 
+	glViewport(x, y, w, h);
 	glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 }
 
@@ -467,8 +481,6 @@ render_window(SDL_Window *window)
 
 	SDL_GL_MakeCurrent(window, gl_ctx);
 	SDL_GL_GetDrawableSize(window, &w, &h);
-	glViewport(0, 0, w, h);
-	glClear(GL_COLOR_BUFFER_BIT);
 
 	if (shader->prog) {
 		glUseProgram(shader->prog);
@@ -478,33 +490,47 @@ render_window(SDL_Window *window)
 }
 
 struct gui_quad {
-	float xfrm[4];
-	float tfrm[4];
-	float rgba[4];
+	float pos_xfrm[4];
+	float shp_xfrm[4];
+	float img_xfrm[4];
 };
-
+struct gui_rect {
+	int16_t x, y;
+	uint16_t w, h;
+};
+struct color {
+	union {
+		uint8_t rgb[3];
+		struct {
+			uint8_t r, g, b;
+		};
+	};
+};
+/* TODO: store color as rgb */
+/* store button state in cmd ? (hover, clicked, disabled?) */
 struct gui_cmd {
 	enum gui_cmd_type {
-		GUI_CLIP,
-		GUI_RECT,
+		GUI_SHAPE,
 		GUI_TEXT,
-		GUI_COLOR,
 	} type;
 	union {
 		struct {
-			uint8_t r,g,b,a;
-		} color;
-		struct gui_rect {
-			int16_t x, y;
-			uint16_t w, h;
-		} rect, clip;
+			struct gui_rect rect;
+			struct gui_rect shape;
+			struct gui_rect image;
+		} shape;
 		struct {
 			int16_t x, y;
+			uint8_t col;
 			uint8_t len;
 			char str[];
 		} text;
 	};
 };
+struct color gui_colors[128];
+static size_t gui_color_count;
+static uint8_t gui_last_color;
+
 static struct gui_cmd gui_cmd_queue[4096];
 static size_t gui_cmd_queue_size;
 static GLuint gui_prg;
@@ -550,7 +576,7 @@ gui_cmd_next(struct gui_cmd *cmd)
 #define gui_for_each_cmd(c) for ((c) = gui_cmd_queue; (c); (c) = gui_cmd_next(c))
 
 static void
-gui_text(int x, int y, const char *s)
+gui_text(int x, int y, const char *s, uint8_t col)
 {
 	struct gui_cmd *cmd = gui_cmd_queue_end();
 	size_t tlen = strlen(s);
@@ -564,6 +590,7 @@ gui_text(int x, int y, const char *s)
 		cmd->type = GUI_TEXT;
 		cmd->text.x = x;
 		cmd->text.y = y;
+		cmd->text.col = col;
 		cmd->text.len = len;
 		memcpy(cmd->text.str, s, len);
 
@@ -575,51 +602,61 @@ gui_text(int x, int y, const char *s)
 }
 
 static void
+gui_shape(struct gui_rect rect, struct gui_rect shape, struct gui_rect image)
+{
+	struct gui_cmd *cmd = gui_cmd_queue_end();
+	size_t size = sizeof(struct gui_cmd);
+	if (gui_cmd_queue_size + size > sizeof(gui_cmd_queue))
+		return;
+	cmd->type = GUI_SHAPE;
+	cmd->shape.rect = rect;
+	cmd->shape.shape = shape;
+	cmd->shape.image = image;
+
+	gui_cmd_queue_size += size;
+
+}
+static struct gui_rect
 gui_rect(int x, int y, unsigned int w, unsigned int h)
 {
-	struct gui_cmd *cmd = gui_cmd_queue_end();
-	size_t size = sizeof(struct gui_cmd);
-	if (gui_cmd_queue_size + size > sizeof(gui_cmd_queue))
-		return;
-	cmd->type = GUI_RECT;
-	cmd->rect.x = x;
-	cmd->rect.y = y;
-	cmd->rect.w = w;
-	cmd->rect.h = h;
-
-	gui_cmd_queue_size += size;
+	struct gui_rect rect = { .x = x, .y = y, .w = w, .h = h, };
+	return rect;
 }
 
 static void
-gui_clip(int x, int y, unsigned int w, unsigned int h)
+gui_image(struct gui_rect rect, struct gui_rect image)
 {
-	struct gui_cmd *cmd = gui_cmd_queue_end();
-	size_t size = sizeof(struct gui_cmd);
-	if (gui_cmd_queue_size + size > sizeof(gui_cmd_queue))
-		return;
-	cmd->type = GUI_CLIP;
-	cmd->rect.x = x;
-	cmd->rect.y = y;
-	cmd->rect.w = w;
-	cmd->rect.h = h;
-
-	gui_cmd_queue_size += size;
+	gui_shape(rect,
+		  gui_rect(0, 0, 0, 0),
+		  image);
 }
 
 static void
-gui_color(uint8_t r, uint8_t g, uint8_t b, uint8_t a)
+gui_fill(int x, int y, unsigned int w, unsigned int h, uint8_t c)
 {
-	struct gui_cmd *cmd = gui_cmd_queue_end();
-	size_t size = sizeof(struct gui_cmd);
-	if (gui_cmd_queue_size + size > sizeof(gui_cmd_queue))
-		return;
-	cmd->type = GUI_COLOR;
-	cmd->color.r = r;
-	cmd->color.g = g;
-	cmd->color.b = b;
-	cmd->color.a = a;
+	gui_shape(gui_rect(x, y, w, h),
+		  gui_rect(0, 0, 0, 0),
+		  gui_rect(c, 0, 0, 0));
 
-	gui_cmd_queue_size += size;
+}
+
+static uint8_t
+gui_color(uint8_t r, uint8_t g, uint8_t b)
+{
+	size_t i;
+	for (i = 0; i < gui_color_count && i < LEN(gui_colors); i++) {
+		struct color c = gui_colors[i];
+		if (c.r == r && c.g == g && c.b == b)
+			return gui_last_color = i;
+	}
+	if (i < LEN(gui_colors)) {
+		i = gui_color_count++;
+		gui_colors[i].r = r;
+		gui_colors[i].g = g;
+		gui_colors[i].b = b;
+		return gui_last_color = i;
+	}
+	return 0;
 }
 
 static void
@@ -631,29 +668,27 @@ gui_init(void)
 	const char *vert =
 		GLSL_VERSION
 		"layout (location = 0) in vec2 a_pos;\n"
-		"layout (location = 1) in vec4 a_xfrm;\n"
-		"layout (location = 2) in vec4 a_tfrm;\n"
-		"layout (location = 3) in vec4 a_rgba;\n"
-		"out vec2 texcoord;\n"
-		"out vec4 color;\n"
+		"layout (location = 1) in vec4 a_pos_xfrm;\n"
+		"layout (location = 2) in vec4 a_shp_xfrm;\n"
+		"layout (location = 3) in vec4 a_img_xfrm;\n"
+		"out vec2 v_shape;\n"
+		"out vec2 v_image;\n"
+		"vec2 xfrm(vec4 x) { return a_pos * x.zw + x.xy; }\n"
 		"void main() {\n"
-		"	gl_Position = vec4(a_pos * a_xfrm.xy + a_xfrm.zw, 0.0, 0.5);\n"
-		"	texcoord = a_pos * a_tfrm.xy + a_tfrm.zw;\n"
-		"	color = a_rgba;\n"
+		"	gl_Position = vec4(xfrm(a_pos_xfrm), 0.0, 0.5);\n"
+		"	v_shape = xfrm(a_shp_xfrm);\n"
+		"	v_image = xfrm(a_img_xfrm);\n"
 		"}\n";
 	const char *frag =
 		GLSL_VERSION
-		"in vec2 texcoord;\n"
-		"in vec4 color;\n"
+		"in vec2 v_shape;\n"
+		"in vec2 v_image;\n"
 		"out vec4 out_color;\n"
-		"uniform sampler2D t_gui;"
+		"uniform sampler2D t_shape;"
+		"uniform sampler2D t_image;"
 		"void main() {\n"
-		"	if (texture(t_gui, texcoord).r < 0.5) discard;\n"
-		"	out_color = color;\n"
-//		"ivec2 p= ivec2(texcoord * textureSize(t_gui, 0));\n"
-//		"	out_color = vec4(texelFetch(t_gui, p, 0).rgb, 1.0);\n"
-//		"	out_color = vec4(texcoord, 0.0, 1.0);\n"
-//		"	out_color = vec4(texture(t_gui, texcoord).rgb, 1.0);\n"
+		"	if (texture(t_shape, v_shape).r < 0.5) discard;\n"
+		"	out_color = vec4(texture(t_image, v_image).rgb, 1.0);\n"
 		"}\n";
 	const char *file = "ascii.qoi";
 	GLuint loc;
@@ -689,27 +724,27 @@ gui_init(void)
 	glVertexAttribDivisor(loc, 0);
 	glEnableVertexAttribArray(loc);
 
-	loc = 1; /* a_xfrm */
+	loc = 1; /* a_pos_xfrm */
 	glBindBuffer(GL_ARRAY_BUFFER, gui_vbo);
 	glVertexAttribPointer(loc, 4, GL_FLOAT, GL_FALSE,
 			      sizeof(struct gui_quad),
-			      (void *)offsetof(struct gui_quad, xfrm));
+			      (void *)offsetof(struct gui_quad, pos_xfrm));
 	glVertexAttribDivisor(loc, 1);
 	glEnableVertexAttribArray(loc);
 
-	loc = 2; /* a_tfrm */
+	loc = 2; /* a_shp_xfrm */
 	glBindBuffer(GL_ARRAY_BUFFER, gui_vbo);
 	glVertexAttribPointer(loc, 4, GL_FLOAT, GL_FALSE,
 			      sizeof(struct gui_quad),
-			      (void *)offsetof(struct gui_quad, tfrm));
+			      (void *)offsetof(struct gui_quad, shp_xfrm));
 	glVertexAttribDivisor(loc, 1);
 	glEnableVertexAttribArray(loc);
 
-	loc = 3; /* a_rgba */
+	loc = 3; /* a_img_xfrm */
 	glBindBuffer(GL_ARRAY_BUFFER, gui_vbo);
 	glVertexAttribPointer(loc, 4, GL_FLOAT, GL_FALSE,
 			      sizeof(struct gui_quad),
-			      (void *)offsetof(struct gui_quad, rgba));
+			      (void *)offsetof(struct gui_quad, img_xfrm));
 	glVertexAttribDivisor(loc, 1);
 	glEnableVertexAttribArray(loc);
 
@@ -759,53 +794,53 @@ gui_draw(void)
 	SDL_GL_GetDrawableSize(win_ctrl, &w, &h);
 	struct gui_cmd *cmd;
 	struct gui_rect r, clip = { 0, 0, w, h };
-	struct gui_quad q = {
-		.rgba = { 1.0, 1.0, 1.0, 1.0 },
-	};
-	GLint utex = glGetUniformLocation(gui_prg, "t_gui");
+	struct gui_quad q;
+	GLint utex = glGetUniformLocation(gui_prg, "t_shape");
 	glUseProgram(gui_prg);
 	if (utex >= 0) {
 		glActiveTexture(GL_TEXTURE0 + tex_gui.unit);
 		glProgramUniform1i(gui_prg, utex, tex_gui.unit);
 		glBindTexture(tex_gui.type, tex_gui.id);
 	}
+
+	utex = glGetUniformLocation(gui_prg, "t_image");
+	if (utex >= 0) {
+		glActiveTexture(GL_TEXTURE0 + tex_shd.unit);
+		glProgramUniform1i(gui_prg, utex, tex_shd.unit);
+		glBindTexture(tex_shd.type, tex_shd.id);
+		glTexSubImage2D(tex_shd.type, 0, 0, 0, 128, 1, GL_RGB, GL_UNSIGNED_BYTE, gui_colors);
+
+	}
+
+//	void glTextureSubImage2D(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type,
 	glBindVertexArray(gui_vao);
 
 	if (gui_cmd_queue_size == 0)
 		return;
-
-//	glScissor(clip.x, h - clip.y - clip.h, clip.w, clip.h);
 
 	gui_for_each_cmd(cmd) {
 		size_t i;
 		float ox;
 		char c;
 		switch (cmd->type) {
-		case GUI_CLIP:
-			clip = cmd->clip;
-			//glEnable(GL_SCISSOR_TEST);
-			//glScissor(clip.x, h - clip.y - clip.h, clip.w, clip.h);
-			break;
-		case GUI_COLOR:
-			q.rgba[0] = cmd->color.r / 255.0;
-			q.rgba[1] = cmd->color.g / 255.0;
-			q.rgba[2] = cmd->color.b / 255.0;
-			q.rgba[3] = cmd->color.a / 255.0;
-			break;
 		case GUI_TEXT:
 			ox = cmd->text.x;
+			q.img_xfrm[0] = cmd->text.col/128.0;
+			q.img_xfrm[1] = 0;
+			q.img_xfrm[2] = 0;
+			q.img_xfrm[3] = 0;
 			for (i = 0; i < cmd->text.len; i++, ox += FW) {
 				c = cmd->text.str[i];
-				q.xfrm[0] = +(FW+0.5)/(float)w;
-				q.xfrm[1] = -(FH+0.5)/(float)h;
-				q.xfrm[2] = -0.5 + ox/(float)w;
-				q.xfrm[3] = +0.5 - cmd->text.y/(float)h;
+				q.pos_xfrm[0] = -0.5 + ox/(float)w;
+				q.pos_xfrm[1] = +0.5 - cmd->text.y/(float)h;
+				q.pos_xfrm[2] = +(FW)/(float)w;
+				q.pos_xfrm[3] = -(FH)/(float)h;
 
 				if (c <= ' ') continue;
-				q.tfrm[0] = 1.0/16.0;
-				q.tfrm[1] = 1.0/6.0;
-				q.tfrm[2] = ((int)(c - ' ') % 16) / 16.0;
-				q.tfrm[3] = ((int)(c - ' ') / 16) / 6.0;
+				q.shp_xfrm[0] = ((int)(c - ' ') % 16) / 16.0;
+				q.shp_xfrm[1] = ((int)(c - ' ') / 16) / 6.0;
+				q.shp_xfrm[2] = 1.0/16.0;
+				q.shp_xfrm[3] = 1.0/6.0;
 
 				r.x = ox;
 				r.y = cmd->text.y;
@@ -815,54 +850,63 @@ gui_draw(void)
 					gui_push_quad(q);
 			}
 			break;
-		case GUI_RECT:
-			q.xfrm[0] = +((cmd->rect.w+0.5)/(float)w);
-			q.xfrm[1] = -((cmd->rect.h+0.5)/(float)h);
-			q.xfrm[2] = -0.5 + cmd->rect.x/(float)w;
-			q.xfrm[3] = +0.5 - cmd->rect.y/(float)h;
-			q.tfrm[0] = 0;
-			q.tfrm[1] = 0;
-			q.tfrm[2] = 0;
-			q.tfrm[3] = 0;
+		case GUI_SHAPE:
+			q.pos_xfrm[0] = -0.5 + cmd->shape.rect.x/(float)w;
+			q.pos_xfrm[1] = +0.5 - cmd->shape.rect.y/(float)h;
+			q.pos_xfrm[2] = +((cmd->shape.rect.w)/(float)w);
+			q.pos_xfrm[3] = -((cmd->shape.rect.h)/(float)h);
 
-			if (gui_rect_overlap(cmd->rect, clip))
+			q.shp_xfrm[0] = 0;
+			q.shp_xfrm[1] = 0;
+			q.shp_xfrm[2] = 0;
+			q.shp_xfrm[3] = 0;
+			{
+			float ww = 128.0;
+			float hh = 1 + 16 * 128.0;
+			q.img_xfrm[0] = cmd->shape.image.x/ww;
+			q.img_xfrm[1] = (cmd->shape.image.y+cmd->shape.image.h)/hh;
+			q.img_xfrm[2] = cmd->shape.image.w/ww;
+			q.img_xfrm[3] = -cmd->shape.image.h/hh;
+			}
+			if (gui_rect_overlap(cmd->shape.rect, clip))
 				gui_push_quad(q);
 
 			break;
 		}
 	}
 	gui_flush_draw_queue();
-
-//	glScissor(0, 0, w, h);
 }
 
 static void
-gui_draw_grid_elem(int idx, int px, int py, size_t sz)
+gui_draw_grid_elem(size_t idx, int px, int py, size_t sz)
 {
-	if (&shaders[idx] == shader) {
-		gui_color(255, 0, 0, 255);
-		gui_rect(px-4, py-4, sz+8, sz+8);
-	}
+	uint8_t col;
 	if (idx < shader_count)
-		gui_color(128,128,128,255);
+		col = gui_color(40, 40, 40);
 	else
-		gui_color(20,20,20,255);
-	if (idx < shader_count && gui_mouse_in((struct gui_rect){px, py, sz, sz})) {
-		gui_color(250,20,20,255);
+		col = gui_color(20, 20, 20);
+	if (&shaders[idx] == shader) {
+		gui_fill(px-4, py-4, sz+8, sz+8, gui_color(255, 0, 0));
+	} else if (idx < shader_count && gui_mouse_in((struct gui_rect){px, py, sz, sz})) {
+		gui_fill(px-4, py-4, sz+8, sz+8, gui_color(80, 80, 80));
+		col = gui_color(80, 80, 80);
 		if (mouse_left_click())
 			shader = &shaders[idx];
 	}
 
-	gui_rect(px, py, sz, sz);
+	if (idx < shader_count)
+		gui_image(gui_rect(px, py, sz, sz),
+			  gui_rect(0, 1 + idx * 128, 128, 128));
+	else
+		gui_fill(px, py, sz, sz, col);
 	if (idx < shader_count) {
 		char buf[] = "123467890";
 		snprintf(buf, sizeof(buf), "%d", shaders[idx].prog);
-		gui_rect(px, py, FW * strlen(buf), FH);
+		gui_fill(px, py, FW * strlen(buf), FH, col);
+		gui_text(px, py, buf, gui_color(255, 255, 255));
 
-		gui_rect(px, py+sz, FW * strlen(shaders[idx].name), FH);
-		gui_color(255, 255, 255,255);
-		gui_text(px, py+sz, shaders[idx].name);
-		gui_text(px, py, buf);
+		gui_fill(px, py+sz, FW * strlen(shaders[idx].name), FH, col);
+		gui_text(px, py+sz, shaders[idx].name, gui_color(255, 255, 255));
 	}
 }
 
@@ -892,13 +936,20 @@ gui_view_grid(void)
 static void
 render(void)
 {
-	char buf[64];
-	size_t inst_nb = gui_total_count;
-	size_t draw_nb = gui_draw_count;
-#if 1 /* currently hacking on control window */
+#if 0 /* currently hacking on control window */
 	render_window(win_live);
 	SDL_GL_SwapWindow(win_live);
 #endif
+	glBindFramebuffer(GL_FRAMEBUFFER, shaders_fbo);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex_shd.id, 0);
+
+	for (size_t i = 0; i < shader_count; i++) {
+		glUseProgram(shaders[i].prog);
+		update_shader(&shaders[i]);
+		render_shader(&shaders[i], 0, 1 + i * 128, 128, 128);
+	}
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
 	render_window(win_ctrl);
 	gui_begin();
 
@@ -906,11 +957,10 @@ render(void)
 #if 0
 //	gui_color(255,0,250,255);
 //	gui_rect(xpos, ypos, 64, 64);
-//	gui_clip(xpos, ypos, 200, 200);
 
-	gui_color(210,10,10,255);
+	gui_color(210, 10, 10);
 	gui_rect(0, 0, LEN(fps), 30);
-	gui_color(255,255,255,255);
+	gui_color(255,255,255);
 
 	float f, tf = 0;
 	for (int i = 0; i < LEN(fps); i++) {
@@ -1114,7 +1164,7 @@ sdl_gl_init(void)
 		die("GL init failed\n");
 
 	win_live = window;
-#if 0
+#if 1
 	win_ctrl = win_live;
 #else
 	win_ctrl = SDL_CreateWindow("ctrl", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
@@ -1190,6 +1240,7 @@ main(int argc, char **argv)
 	plan = fftwf_plan_r2r_1d(FFT_SIZE, fftw_in, fftw_out, FFTW_REDFT10, FFTW_MEASURE);
 
 	init();
+	curr_time = get_time();
 	while (1) {
 		prev_time = curr_time;
 		curr_time = get_time();
