@@ -755,6 +755,7 @@ gui_init(void)
 static void
 gui_flush_draw_queue(void)
 {
+	glBindBuffer(GL_ARRAY_BUFFER, gui_vbo);
 	glBufferData(GL_ARRAY_BUFFER, gui_count*sizeof(struct gui_quad), gui_data, GL_STREAM_DRAW);
 	glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, gui_count);
 	gui_total_count += gui_count;
