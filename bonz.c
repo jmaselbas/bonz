@@ -46,6 +46,7 @@ static inline int mouse_middle_click(void) { return mouse_click(2); }
 static inline int mouse_right_click(void) { return mouse_click(3); }
 
 static int verbose;
+static int show_gui;
 static char *argv0;
 static GLuint quad_vao;
 static GLuint quad_vbo;
@@ -351,6 +352,9 @@ input(void)
 			break;
 		case SDL_KEYDOWN:
 			switch (e.key.keysym.sym) {
+			case SDLK_TAB:
+				show_gui = !show_gui;
+				break;
 			case SDLK_v:
 				verbose = !verbose;
 				printf("--- %s ---\n", verbose ? "verbose" : "quiet");
@@ -697,11 +701,12 @@ render(void)
 
 	render_window(win_ctrl);
 
-	gui_begin(&gui_state);
-	gui_view_grid();
-	SDL_GL_GetDrawableSize(win_ctrl, &w, &h);
-	gui_draw(w, h, gui_prg, tex_gui.id, tex_shd.id);
-
+	if (show_gui) {
+		gui_begin(&gui_state);
+		gui_view_grid();
+		SDL_GL_GetDrawableSize(win_ctrl, &w, &h);
+		gui_draw(w, h, gui_prg, tex_gui.id, tex_shd.id);
+	}
 	SDL_GL_SwapWindow(win_ctrl);
 }
 
