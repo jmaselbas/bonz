@@ -26,15 +26,15 @@ struct texture {
 	GLuint id;
 };
 
-SDL_Window *win_live;
-SDL_Window *win_ctrl;
-unsigned int default_width = 1080;
-unsigned int default_height = 800;
+static SDL_Window *win_live;
+static SDL_Window *win_ctrl;
+static unsigned int default_width = 1080;
+static unsigned int default_height = 800;
 
-SDL_GLContext gl_ctx;
-double time_start;
-double xpos, ypos;
-int buttons[8];
+static SDL_GLContext gl_ctx;
+static double time_start;
+static double xpos, ypos;
+static int buttons[8];
 
 static inline int
 mouse_click(int b)
@@ -45,11 +45,11 @@ static inline int mouse_left_click(void) { return mouse_click(1); }
 static inline int mouse_middle_click(void) { return mouse_click(2); }
 static inline int mouse_right_click(void) { return mouse_click(3); }
 
-int verbose;
-char *argv0;
-GLuint quad_vao;
-GLuint quad_vbo;
-GLuint vshd;
+static int verbose;
+static char *argv0;
+static GLuint quad_vao;
+static GLuint quad_vbo;
+static GLuint vshd;
 
 struct shader {
 	GLuint prog;
@@ -57,38 +57,38 @@ struct shader {
 	char *name;
 	time_t time;
 };
-size_t shader_count;
-struct shader shaders[16];
-GLuint shaders_fbo;
-struct texture tex_shd;
-struct shader *shader;
+static size_t shader_count;
+static struct shader shaders[16];
+static GLuint shaders_fbo;
+static struct texture tex_shd;
+static struct shader *shader;
 
-struct texture tex_gui;
-struct texture tex_snd;
-struct texture tex_fft;
-struct texture tex_fft_smth;
-float smth_fac = 0.9;
+static struct texture tex_gui;
+static struct texture tex_snd;
+static struct texture tex_fft;
+static struct texture tex_fft_smth;
+static float smth_fac = 0.9;
 
-char *frag;
-size_t frag_size;
+static char *frag;
+static size_t frag_size;
 
-char logbuf[4096];
-GLsizei logsize;
-unsigned char midi_cc_last[128];
-unsigned char midi_cc[16][128];
+static char logbuf[4096];
+static GLsizei logsize;
+static unsigned char midi_cc_last[128];
+static unsigned char midi_cc[16][128];
 
 #include <fftw3.h>
 #define FFT_SIZE 2048
-float fftw_in[FFT_SIZE], fftw_out[FFT_SIZE];
-float fft_smth[FFT_SIZE];
-fftwf_plan plan;
+static float fftw_in[FFT_SIZE], fftw_out[FFT_SIZE];
+static float fft_smth[FFT_SIZE];
+static fftwf_plan plan;
 
 #include <jack/jack.h>
 #include <jack/midiport.h>
 
-jack_client_t *jack;
-jack_port_t *midi_port;
-jack_port_t *input_port;
+static jack_client_t *jack;
+static jack_port_t *midi_port;
+static jack_port_t *input_port;
 
 #include "qoi.h"
 
