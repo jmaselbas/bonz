@@ -241,8 +241,10 @@ shader_reload(struct shader *s)
 
 	loc = glGetAttribLocation(s->prog, "a_pos");
 	if (loc >= 0) {
+		glBindBuffer(GL_ARRAY_BUFFER, quad_vbo);
 		glVertexAttribPointer(loc, 2, GL_FLOAT, GL_FALSE, 0, NULL);
 		glEnableVertexAttribArray(loc);
+		glVertexAttribDivisor(loc, 0);
 	}
 	glBindVertexArray(0);
 	printf("--- LOADED --- (%d)\n", nprg);
