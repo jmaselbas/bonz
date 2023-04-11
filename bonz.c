@@ -132,12 +132,13 @@ create_2drgb_tex(size_t w, size_t h, void *data)
 	struct texture tex = create_tex(GL_TEXTURE_2D);
 
 	glBindTexture(tex.type, tex.id);
-	glTexParameteri(tex.type, GL_TEXTURE_WRAP_S, GL_REPEAT);
-	glTexParameteri(tex.type, GL_TEXTURE_WRAP_T, GL_REPEAT);
+
+	glTexParameteri(tex.type, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+	glTexParameteri(tex.type, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
 	glTexParameteri(tex.type, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	glTexParameteri(tex.type, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
-	glTexImage2D(tex.type, 0, GL_RGB, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, data);
+	glTexImage2D(tex.type, 0, GL_RGB, w, h, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
 
 	return tex;
 }
