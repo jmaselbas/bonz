@@ -12,6 +12,10 @@
 #include "glad.h"
 #include <SDL.h>
 
+#define LEN(a) (sizeof(a)/sizeof(*a))
+#define MAX(a,b) ((a)>(b) ? (a) : (b))
+#define MIN(a,b) ((a)<(b) ? (a) : (b))
+
 #define GLSL_VERSION "#version 400 core\n"
 
 struct texture {
@@ -19,8 +23,6 @@ struct texture {
 	GLenum type;
 	GLuint id;
 };
-
-#define LEN(a) (sizeof(a)/sizeof(*a))
 
 SDL_Window *win_live;
 SDL_Window *win_ctrl;
