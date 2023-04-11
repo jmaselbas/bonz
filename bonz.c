@@ -48,6 +48,8 @@ struct shader {
 };
 size_t shader_count;
 struct shader shaders[16];
+GLuint shaders_fbo;
+struct texture tex_shd;
 struct shader *shader;
 
 struct texture tex_snd;
@@ -294,6 +296,9 @@ shader_init(void)
 		die("error in vertex shader\n");
 
 	glEnable(GL_BLEND);
+
+	tex_shd = create_2drgb_tex(128, 1 + LEN(shaders) * 128, NULL);
+	glGenFramebuffers(1, &shaders_fbo);
 }
 
 static void
@@ -450,12 +455,23 @@ render_window(SDL_Window *window)
 static void
 render(void)
 {
+
+#ifndef SINGLE_WIN
 	render_window(win_live);
 	SDL_GL_SwapWindow(win_live);
-#ifdef SINGLE_WIN
+#endif
+
+	glBindFramebuffer(GL_FRAMEBUFFER, shaders_fbo);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex_shd.id, 0);
+	for (size_t i = 0; i < shader_count; i++) {
+		glUseProgram(shaders[i].prog);
+		update_shader(&shaders[i]);
+		render_shader(&shaders[i], 0, 1 + i * 128, 128, 128);
+	}
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
 	render_window(win_ctrl);
 	SDL_GL_SwapWindow(win_ctrl);
-#endif
 }
 
 static void
