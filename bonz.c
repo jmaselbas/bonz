@@ -269,10 +269,10 @@ shader_init(void)
 	};
 	const char *vert =
 		GLSL_VERSION
-		"in vec2 a_pos;\n"
+		"layout (location = 0) in vec2 a_pos;\n"
 		"out vec2 texcoord;\n"
 		"void main() {\n"
-		"	gl_Position = vec4(a_pos * 2.0 - 1.0, 0.0, 1.0);\n"
+		"	gl_Position = vec4(a_pos - 0.5, 0.0, 0.5);\n"
 		"	texcoord = a_pos;\n"
 		"}\n";
 
@@ -421,6 +421,7 @@ render_shader(struct shader *s, int x, int y, int w, int h)
 	if (loc >= 0)
 		glProgramUniform2f(s->prog, loc, w-x, h-y);
 
+	glBindVertexArray(quad_vao);
 	glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 }
 
