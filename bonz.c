@@ -190,16 +190,16 @@ shader_compile(GLuint shd, const GLchar *txt, GLint len)
 }
 
 static int
-shader_link(GLuint prg, GLuint vert, GLuint frag)
+shader_link(GLuint prog, GLuint vert, GLuint frag)
 {
 	int ret;
 
-	glAttachShader(prg, vert);
-	glAttachShader(prg, frag);
-	glLinkProgram(prg);
-	glGetProgramiv(prg, GL_LINK_STATUS, &ret);
+	glAttachShader(prog, vert);
+	glAttachShader(prog, frag);
+	glLinkProgram(prog);
+	glGetProgramiv(prog, GL_LINK_STATUS, &ret);
 	if (!ret) {
-		glGetProgramInfoLog(prg, sizeof(logbuf), &logsize, logbuf);
+		glGetProgramInfoLog(prog, sizeof(logbuf), &logsize, logbuf);
 		printf("--- ERROR ---\n%s", logbuf);
 	}
 	return ret;
