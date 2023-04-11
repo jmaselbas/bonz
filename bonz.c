@@ -12,6 +12,8 @@
 #include "glad.h"
 #include <SDL.h>
 
+#define SINGLE_WIN 1
+
 #define LEN(a) (sizeof(a)/sizeof(*a))
 #define MAX(a,b) ((a)>(b) ? (a) : (b))
 #define MIN(a,b) ((a)<(b) ? (a) : (b))
@@ -442,15 +444,17 @@ render_window(SDL_Window *window)
 		update_shader(shader);
 		render_shader(shader, 0, 0, w, h);
 	}
-
-	SDL_GL_SwapWindow(window);
 }
 
 static void
 render(void)
 {
 	render_window(win_live);
+	SDL_GL_SwapWindow(win_live);
+#ifdef SINGLE_WIN
 	render_window(win_ctrl);
+	SDL_GL_SwapWindow(win_ctrl);
+#endif
 }
 
 static void
@@ -641,10 +645,13 @@ sdl_gl_init(void)
 		die("GL init failed\n");
 
 	win_live = window;
-
+#if SINGLE_WIN
+	win_ctrl = win_live;
+#else
 	win_ctrl = SDL_CreateWindow("ctrl", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
 				    default_width, default_height,
 				    SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
+#endif
 }
 
 static void
