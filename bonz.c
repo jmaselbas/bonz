@@ -159,21 +159,6 @@ update_1dr32_tex(struct texture *tex, void *data, size_t size)
 	glTexSubImage1D(GL_TEXTURE_1D, 0, 0, size, GL_RED, GL_FLOAT, data);
 }
 
-static void
-shader_bind_quad(struct shader *s)
-{
-	GLint position;
-
-	glUseProgram(s->prog);
-	glBindVertexArray(quad_vao);
-
-	position = glGetAttribLocation(s->prog, "a_pos");
-	if (position >= 0) {
-		glVertexAttribPointer(position, 2, GL_FLOAT, GL_FALSE, 0, NULL);
-		glEnableVertexAttribArray(position);
-	}
-}
-
 static int
 shader_compile(GLuint shd, const GLchar *txt, GLint len)
 {
@@ -214,6 +199,7 @@ shader_reload(struct shader *s)
 	long size = 0;
 	const GLchar *src;
 	GLint len;
+	GLint loc;
 
 	if (!file) {
 		fprintf(stderr, "%s: %s\n", s->name, strerror(errno));
@@ -250,8 +236,16 @@ shader_reload(struct shader *s)
 		glDeleteProgram(s->prog);
 	s->prog = nprg;
 
+	glUseProgram(s->prog);
+	glBindVertexArray(quad_vao);
+
+	loc = glGetAttribLocation(s->prog, "a_pos");
+	if (loc >= 0) {
+		glVertexAttribPointer(loc, 2, GL_FLOAT, GL_FALSE, 0, NULL);
+		glEnableVertexAttribArray(loc);
+	}
+	glBindVertexArray(0);
 	printf("--- LOADED --- (%d)\n", nprg);
-	shader_bind_quad(s);
 }
 
 static void
