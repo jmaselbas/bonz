@@ -63,6 +63,7 @@ GLuint shaders_fbo;
 struct texture tex_shd;
 struct shader *shader;
 
+struct texture tex_gui;
 struct texture tex_snd;
 struct texture tex_fft;
 struct texture tex_fft_smth;
@@ -90,6 +91,11 @@ jack_port_t *midi_port;
 jack_port_t *input_port;
 
 #include "qoi.h"
+
+#define GUI_IMPLEMENTATION
+#include "gui.h"
+static struct gui_state gui_state;
+static GLuint gui_prg;
 
 static void fini(void);
 
@@ -468,8 +474,212 @@ render_window(SDL_Window *window)
 }
 
 static void
+init_gui(void)
+{
+	GLuint nprg = glCreateProgram();
+	GLuint vshd = glCreateShader(GL_VERTEX_SHADER);
+	GLuint fshd = glCreateShader(GL_FRAGMENT_SHADER);
+	const char *vert =
+		GLSL_VERSION
+		"layout (location = 0) in vec2 a_pos;\n"
+		"layout (location = 1) in vec4 a_pos_xfrm;\n"
+		"layout (location = 2) in vec4 a_shp_xfrm;\n"
+		"layout (location = 3) in vec4 a_col_xfrm;\n"
+		"out vec2 v_shape;\n"
+		"out vec2 v_color;\n"
+		"vec2 xfrm(vec4 x) { return a_pos * x.zw + x.xy; }\n"
+		"void main() {\n"
+		"	gl_Position = vec4(xfrm(a_pos_xfrm), 0.0, 0.5);\n"
+		"	v_shape = xfrm(a_shp_xfrm);\n"
+		"	v_color = xfrm(a_col_xfrm);\n"
+		"}\n";
+	const char *frag =
+		GLSL_VERSION
+		"in vec2 v_shape;\n"
+		"in vec2 v_color;\n"
+		"out vec4 out_color;\n"
+		"uniform sampler2D t_shape;"
+		"uniform sampler2D t_color;"
+		"void main() {\n"
+		"	if (texture(t_shape, v_shape).r < 0.5) discard;\n"
+		"	out_color = vec4(texture(t_color, v_color).rgb, 1.0);\n"
+		"}\n";
+	const char *file = "ascii.qoi";
+	qoi_desc desc;
+	void *data = qoi_read(file, &desc, 3);
+
+	if (!data)
+		die("%s: qoi_read: %s\n", file, strerror(errno));
+	/* hack: set the first pixel to 0xffffff */
+	memcpy(data, (unsigned char[3]){255,255,255}, 3 * sizeof(char));
+	tex_gui = create_2drgb_tex(desc.width, desc.height, data);
+	free(data);
+
+	if (!shader_compile(vshd, vert, strlen(vert)))
+		die("gui: error in vertex shader\n");
+	if (!shader_compile(fshd, frag, strlen(frag)))
+		die("gui: error in fragment shader\n");
+	if (!shader_link(nprg, vshd, fshd))
+		die("gui: error in program link\n");
+
+	gui_prg = nprg;
+	gui_init(&gui_state, gui_prg);
+}
+
+/* font size */
+static float FW = 7.0;
+static float FH = 9.0;
+
+void
+gui_draw(int w, int h, GLuint prog, GLuint tex_s,  GLuint tex_c)
+{
+	struct gui_cmd *cmd;
+	struct gui_rect r, clip = { 0, 0, w, h };
+	struct gui_quad q;
+	GLint utex;
+
+	if (gui->cmd_queue_size == 0)
+		return;
+
+	glUseProgram(prog);
+
+	utex = glGetUniformLocation(prog, "t_shape");
+	if (utex >= 0) {
+		glActiveTexture(GL_TEXTURE0 + 1);
+		glUniform1i(utex, 1);
+		glBindTexture(GL_TEXTURE_2D, tex_s);
+	}
+
+	utex = glGetUniformLocation(prog, "t_color");
+	if (utex >= 0) {
+		glActiveTexture(GL_TEXTURE0 + 2);
+		glUniform1i(utex, 2);
+		glBindTexture(GL_TEXTURE_2D, tex_c);
+		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 128, 1, GL_RGB, GL_UNSIGNED_BYTE, gui->colors);
+	}
+
+	glBindVertexArray(gui->vao);
+
+	gui_for_each_cmd(cmd) {
+		size_t i;
+		float ox;
+		char c;
+		switch (cmd->type) {
+		case GUI_TEXT:
+			ox = cmd->text.x;
+			q.img_xfrm[0] = cmd->text.col/128.0;
+			q.img_xfrm[1] = 0;
+			q.img_xfrm[2] = 0;
+			q.img_xfrm[3] = 0;
+			for (i = 0; i < cmd->text.len; i++, ox += FW) {
+				c = cmd->text.str[i];
+				q.pos_xfrm[0] = -0.5 + ox/(float)w;
+				q.pos_xfrm[1] = +0.5 - cmd->text.y/(float)h;
+				q.pos_xfrm[2] = +(FW)/(float)w;
+				q.pos_xfrm[3] = -(FH)/(float)h;
+
+				if (c <= ' ') continue;
+				q.shp_xfrm[0] = ((int)(c - ' ') % 16) / 16.0;
+				q.shp_xfrm[1] = ((int)(c - ' ') / 16) / 6.0;
+				q.shp_xfrm[2] = 1.0/16.0;
+				q.shp_xfrm[3] = 1.0/6.0;
+
+				r.x = ox;
+				r.y = cmd->text.y;
+				r.w = FW;
+				r.h = FH;
+				if (gui_rect_overlap(r, clip))
+					gui_push_quad(q);
+			}
+			break;
+		case GUI_SHAPE:
+			q.pos_xfrm[0] = -0.5 + cmd->shape.rect.x/(float)w;
+			q.pos_xfrm[1] = +0.5 - cmd->shape.rect.y/(float)h;
+			q.pos_xfrm[2] = +((cmd->shape.rect.w)/(float)w);
+			q.pos_xfrm[3] = -((cmd->shape.rect.h)/(float)h);
+
+			q.shp_xfrm[0] = 0;
+			q.shp_xfrm[1] = 0;
+			q.shp_xfrm[2] = 0;
+			q.shp_xfrm[3] = 0;
+			{
+			float ww = 128.0;
+			float hh = 1 + 16 * 128.0;
+			q.img_xfrm[0] = cmd->shape.image.x/ww;
+			q.img_xfrm[1] = (cmd->shape.image.y+cmd->shape.image.h)/hh;
+			q.img_xfrm[2] = cmd->shape.image.w/ww;
+			q.img_xfrm[3] = -cmd->shape.image.h/hh;
+			}
+			if (gui_rect_overlap(cmd->shape.rect, clip))
+				gui_push_quad(q);
+
+			break;
+		}
+	}
+	gui_flush_draw_queue();
+	glBindVertexArray(0);
+}
+
+static void
+gui_draw_grid_elem(size_t idx, int px, int py, size_t sz)
+{
+	uint8_t col;
+	if (idx < shader_count)
+		col = gui_color(40, 40, 40);
+	else
+		col = gui_color(20, 20, 20);
+	if (&shaders[idx] == shader) {
+		gui_fill(px-4, py-4, sz+8, sz+8, gui_color(255, 0, 0));
+	} else if (idx < shader_count && gui_mouse_in((struct gui_rect){px, py, sz, sz})) {
+		gui_fill(px-4, py-4, sz+8, sz+8, gui_color(80, 80, 80));
+		col = gui_color(80, 80, 80);
+		if (mouse_left_click())
+			shader = &shaders[idx];
+	}
+
+	if (idx < shader_count)
+		gui_image(gui_rect(px, py, sz, sz),
+			  gui_rect(0, 1 + idx * 128, 128, 128));
+	else
+		gui_fill(px, py, sz, sz, col);
+	if (idx < shader_count) {
+		char buf[] = "123467890";
+		snprintf(buf, sizeof(buf), "%zd", idx);
+		gui_fill(px, py, FW * strlen(buf), FH, col);
+		gui_text(px, py, buf, gui_color(255, 255, 255));
+
+		gui_fill(px, py+sz, FW * strlen(shaders[idx].name), FH, col);
+		gui_text(px, py+sz, shaders[idx].name, gui_color(255, 255, 255));
+	}
+}
+
+static void
+gui_view_grid(void)
+{
+	size_t size, i;
+	int ix, iy;
+	int px, py;
+	int padx, pady;
+	int w, h;
+	SDL_GL_GetDrawableSize(win_ctrl, &w, &h);
+
+	size = MIN(w / (2*4+5), h / (2*4+5));
+
+	padx = (w - (2*4+5) * size) / 2;
+	pady = (h - (2*4+5) * size) / 2;
+	for (i = 0; i < LEN(shaders); i++) {
+		ix = i % 4;
+		iy = i / 4;
+		px = ix*(3 * size) + size + padx;
+		py = iy*(3 * size) + size + pady;
+		gui_draw_grid_elem(i, px, py, 2*size);
+	}
+}
+
+static void
 render(void)
 {
+	int w, h;
 
 #ifndef SINGLE_WIN
 	render_window(win_live);
@@ -486,6 +696,12 @@ render(void)
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
 	render_window(win_ctrl);
+
+	gui_begin(&gui_state);
+	gui_view_grid();
+	SDL_GL_GetDrawableSize(win_ctrl, &w, &h);
+	gui_draw(w, h, gui_prg, tex_gui.id, tex_shd.id);
+
 	SDL_GL_SwapWindow(win_ctrl);
 }
 
@@ -695,6 +911,7 @@ init(void)
 	jack_init();
 	shader_init();
 	texture_init();
+	init_gui();
 }
 
 static void
