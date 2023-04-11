@@ -33,6 +33,17 @@ unsigned int default_height = 800;
 
 SDL_GLContext gl_ctx;
 double time_start;
+double xpos, ypos;
+int buttons[8];
+
+static inline int
+mouse_click(int b)
+{
+	return buttons[b] == SDL_PRESSED;
+}
+static inline int mouse_left_click(void) { return mouse_click(1); }
+static inline int mouse_middle_click(void) { return mouse_click(2); }
+static inline int mouse_right_click(void) { return mouse_click(3); }
 
 int verbose;
 char *argv0;
@@ -364,8 +375,12 @@ input(void)
 			break;
 		case SDL_KEYUP:
 		case SDL_MOUSEMOTION:
+			xpos = e.motion.x;
+			ypos = e.motion.y;
+			break;
 		case SDL_MOUSEBUTTONDOWN:
 		case SDL_MOUSEBUTTONUP:
+			buttons[e.button.button] = e.button.state;
 			break;
 		}
 	}
