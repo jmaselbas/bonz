@@ -14,6 +14,8 @@
 
 #define SINGLE_WIN 1
 
+#define __noreturn __attribute__((noreturn))
+
 #define LEN(a) (sizeof(a)/sizeof(*a))
 #define MAX(a,b) ((a)>(b) ? (a) : (b))
 #define MIN(a,b) ((a)<(b) ? (a) : (b))
@@ -99,6 +101,7 @@ static struct gui_state gui_state;
 static GLuint gui_prg;
 
 static void fini(void);
+static void die(const char *fmt, ...) __noreturn;
 
 static void
 die(const char *fmt, ...)
